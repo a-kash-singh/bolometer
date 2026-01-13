@@ -1,4 +1,4 @@
-# Default values for bolometer
+# Default values for bolometer operator
 
 # Operator image configuration
 image:
