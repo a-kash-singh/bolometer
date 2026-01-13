@@ -1,0 +1,79 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bolometer.fullname" . }}-role
+  labels:
+    {{- include "bolometer.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - bolometer.io
+  resources:
+  - profilingconfigs
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - bolometer.io
+  resources:
+  - profilingconfigs/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - bolometer.io
+  resources:
+  - profilingconfigs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/portforward
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - metrics.k8s.io
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bolometer.fullname" . }}-rolebinding
+  labels:
+    {{- include "bolometer.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bolometer.fullname" . }}-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "bolometer.serviceAccountName" . }}
+  namespace: {{ .Values.namespace }}
+{{- end }}

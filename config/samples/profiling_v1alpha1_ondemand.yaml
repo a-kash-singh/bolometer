@@ -1,0 +1,31 @@
+apiVersion: bolometer.io/v1alpha1
+kind: ProfilingConfig
+metadata:
+  name: ondemand-profiling
+  namespace: default
+spec:
+  selector:
+    namespace: default
+    labelSelector:
+      app: my-service
+  
+  thresholds:
+    cpuThresholdPercent: 80
+    memoryThresholdPercent: 90
+    checkIntervalSeconds: 30
+    cooldownSeconds: 300
+  
+  # On-demand continuous profiling enabled
+  onDemand:
+    enabled: true
+    intervalSeconds: 35
+  
+  s3Config:
+    bucket: my-profiling-bucket
+    prefix: ondemand-profiles
+    region: us-west-2
+  
+  profileTypes:
+  - heap
+  - cpu
+

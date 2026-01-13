@@ -1,0 +1,40 @@
+apiVersion: bolometer.io/v1alpha1
+kind: ProfilingConfig
+metadata:
+  name: example-profiling
+  namespace: default
+spec:
+  # Select pods with the bolometer.io/enabled: "true" annotation
+  selector:
+    namespace: default
+    labelSelector:
+      app: my-go-app
+  
+  # Threshold configuration
+  thresholds:
+    cpuThresholdPercent: 80
+    memoryThresholdPercent: 90
+    checkIntervalSeconds: 30
+    cooldownSeconds: 300
+  
+  # Optional: On-demand profiling
+  # Uncomment to enable continuous profiling every 35 seconds
+  # onDemand:
+  #   enabled: true
+  #   intervalSeconds: 35
+  
+  # S3 configuration
+  s3Config:
+    bucket: my-profiling-bucket
+    prefix: profiles
+    region: us-west-2
+    # Optional: endpoint for S3-compatible storage
+    # endpoint: https://s3-compatible-endpoint.com
+  
+  # Profile types to capture
+  profileTypes:
+  - heap
+  - cpu
+  - goroutine
+  - mutex
+

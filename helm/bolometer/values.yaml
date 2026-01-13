@@ -1,0 +1,106 @@
+# Default values for bolometer
+
+# Operator image configuration
+image:
+  repository: bolometer
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Operator deployment configuration
+replicaCount: 1
+
+# Service account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+    # For AWS IRSA (IAM Roles for Service Accounts)
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/bolometer-role
+  name: "bolometer"
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Resources for the operator
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  runAsNonRoot: true
+  runAsUser: 65532
+
+# Leader election
+leaderElection:
+  enabled: true
+
+# Metrics configuration
+metrics:
+  enabled: true
+  port: 8080
+
+# Health probe configuration
+healthProbe:
+  port: 8081
+
+# Namespace to deploy the operator
+namespace: bolometer-system
+
+# CRD installation
+crd:
+  install: true
+
+# Default profiling configuration (can be overridden per ProfilingConfig CR)
+defaultConfig:
+  # Default S3 configuration
+  s3:
+    bucket: ""
+    region: "us-west-2"
+    prefix: "profiles"
+    endpoint: ""
+  
+  # Default threshold configuration
+  thresholds:
+    cpuThresholdPercent: 80
+    memoryThresholdPercent: 90
+    checkIntervalSeconds: 30
+    cooldownSeconds: 300
+  
+  # Default on-demand configuration
+  onDemand:
+    enabled: false
+    intervalSeconds: 35
+  
+  # Default profile types
+  profileTypes:
+    - heap
+    - cpu
+    - goroutine
+    - mutex

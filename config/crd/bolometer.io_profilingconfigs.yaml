@@ -1,0 +1,218 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: profilingconfigs.bolometer.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: bolometer.io
+  names:
+    kind: ProfilingConfig
+    listKind: ProfilingConfigList
+    plural: profilingconfigs
+    shortNames:
+    - pc
+    singular: profilingconfig
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.activePods
+      name: Active Pods
+      type: integer
+    - jsonPath: .status.totalProfiles
+      name: Total Profiles
+      type: integer
+    - jsonPath: .status.totalUploads
+      name: Total Uploads
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ProfilingConfig is the Schema for the profilingconfigs API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object.'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents.'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProfilingConfigSpec defines the desired state of ProfilingConfig
+            properties:
+              onDemand:
+                description: On-demand profiling configuration
+                properties:
+                  enabled:
+                    description: Enabled indicates whether on-demand profiling is enabled
+                    type: boolean
+                  intervalSeconds:
+                    default: 35
+                    description: IntervalSeconds is how often to capture profiles in
+                      on-demand mode
+                    maximum: 60
+                    minimum: 30
+                    type: integer
+                required:
+                - enabled
+                type: object
+              profileTypes:
+                description: 'ProfileTypes specifies which profile types to capture Valid
+                  values: heap, cpu, goroutine, mutex'
+                items:
+                  type: string
+                type: array
+              s3Config:
+                description: S3 configuration for profile uploads
+                properties:
+                  bucket:
+                    description: Bucket is the S3 bucket name
+                    type: string
+                  endpoint:
+                    description: Endpoint is a custom S3 endpoint (for S3-compatible
+                      services)
+                    type: string
+                  prefix:
+                    description: Prefix is the S3 key prefix for uploaded profiles
+                    type: string
+                  region:
+                    description: Region is the AWS region
+                    type: string
+                required:
+                - bucket
+                - region
+                type: object
+              selector:
+                description: Selector for target pods
+                properties:
+                  labelSelector:
+                    additionalProperties:
+                      type: string
+                    description: LabelSelector to filter pods
+                    type: object
+                  namespace:
+                    description: Namespace to watch for pods. If empty, watches all
+                      namespaces
+                    type: string
+                type: object
+              thresholds:
+                description: Threshold configuration for abnormality detection
+                properties:
+                  checkIntervalSeconds:
+                    default: 30
+                    description: CheckIntervalSeconds is how often to check metrics
+                    minimum: 10
+                    type: integer
+                  cooldownSeconds:
+                    default: 300
+                    description: CooldownSeconds is the cooldown period after capturing
+                      a profile to avoid capturing too frequently
+                    minimum: 60
+                    type: integer
+                  cpuThresholdPercent:
+                    default: 80
+                    description: CPUThresholdPercent is the CPU usage percentage threshold
+                      (0-100)
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  memoryThresholdPercent:
+                    default: 90
+                    description: MemoryThresholdPercent is the memory usage percentage
+                      threshold (0-100)
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                type: object
+            required:
+            - s3Config
+            - selector
+            - thresholds
+            type: object
+          status:
+            description: ProfilingConfigStatus defines the observed state of ProfilingConfig
+            properties:
+              activePods:
+                description: ActivePods is the number of pods currently being monitored
+                type: integer
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the ProfilingConfig's state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition
+                        transitioned from one status to another.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating
+                        details about the transition.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation
+                        that the condition was set based upon.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastProfileTime:
+                description: LastProfileTime is the timestamp of the last profile
+                  capture
+                format: date-time
+                type: string
+              totalProfiles:
+                description: TotalProfiles is the total number of profiles captured
+                format: int64
+                type: integer
+              totalUploads:
+                description: TotalUploads is the total number of successful uploads
+                  to S3
+                format: int64
+                type: integer
+            required:
+            - activePods
+            - totalProfiles
+            - totalUploads
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+
