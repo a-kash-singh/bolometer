@@ -1,0 +1,31 @@
+apiVersion: v1
+entries:
+  bolometer:
+  - apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-06-11T08:40:46.647487465Z"
+    description: Measuring the heat of your applications - Kubernetes operator for
+      intelligent Go profiling
+    digest: b8419a1f640617dedfe0011d382c43a98d00457bd104860ee7a8cf3e9b07b6e7
+    home: https://github.com/a-kash-singh/bolometer
+    keywords:
+    - profiling
+    - pprof
+    - golang
+    - go
+    - performance
+    - monitoring
+    - observability
+    - bolometer
+    - threshold
+    maintainers:
+    - email: akashsinghkld+bolometer@gmail.com
+      name: Akash Singh
+    name: bolometer
+    sources:
+    - https://github.com/a-kash-singh/bolometer
+    type: application
+    urls:
+    - https://github.com/a-kash-singh/bolometer/releases/download/bolometer-0.1.0/bolometer-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-06-11T08:40:46.647494848Z"
