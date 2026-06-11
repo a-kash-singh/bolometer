@@ -1,0 +1,37 @@
+{{- if .Values.profilingConfig.create -}}
+apiVersion: bolometer.io/v1alpha1
+kind: ProfilingConfig
+metadata:
+  name: {{ .Values.profilingConfig.name | default "default" }}
+  namespace: {{ .Values.profilingConfig.namespace | default "default" }}
+  labels:
+    {{- include "bolometer.labels" . | nindent 4 }}
+spec:
+  selector:
+    namespace: {{ .Values.profilingConfig.selector.namespace }}
+    {{- with .Values.profilingConfig.selector.labelSelector }}
+    labelSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  thresholds:
+    cpuThresholdPercent: {{ .Values.profilingConfig.thresholds.cpuThresholdPercent | default 80 }}
+    memoryThresholdPercent: {{ .Values.profilingConfig.thresholds.memoryThresholdPercent | default 90 }}
+    checkIntervalSeconds: {{ .Values.profilingConfig.thresholds.checkIntervalSeconds | default 30 }}
+    cooldownSeconds: {{ .Values.profilingConfig.thresholds.cooldownSeconds | default 300 }}
+  {{- if .Values.profilingConfig.onDemand.enabled }}
+  onDemand:
+    enabled: true
+    intervalSeconds: {{ .Values.profilingConfig.onDemand.intervalSeconds | default 35 }}
+  {{- end }}
+  s3Config:
+    bucket: {{ required "profilingConfig.s3.bucket is required when profilingConfig.create=true" .Values.profilingConfig.s3.bucket | quote }}
+    region: {{ .Values.profilingConfig.s3.region | default "us-east-1" | quote }}
+    prefix: {{ .Values.profilingConfig.s3.prefix | default "profiles" | quote }}
+    {{- if .Values.profilingConfig.s3.endpoint }}
+    endpoint: {{ .Values.profilingConfig.s3.endpoint | quote }}
+    {{- end }}
+  {{- with .Values.profilingConfig.profileTypes }}
+  profileTypes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

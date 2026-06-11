@@ -39,6 +39,7 @@ func setupTestReconciler(objs ...client.Object) *ProfilingConfigReconciler {
 	fakeClientset := fake.NewSimpleClientset()
 	fakeMetricsClient := &fakeMetricsClientset{}
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	reconciler := &ProfilingConfigReconciler{
 		Client:         fakeClient,
 		Scheme:         scheme,
@@ -46,6 +47,8 @@ func setupTestReconciler(objs ...client.Object) *ProfilingConfigReconciler {
 		MetricsClient:  fakeMetricsClient,
 		RestConfig:     &rest.Config{},
 		podWatcher:     NewPodWatcher(fakeClientset),
+		baseCtx:        baseCtx,
+		baseCancel:     baseCancel,
 		activeMonitors: make(map[string]context.CancelFunc),
 	}
 

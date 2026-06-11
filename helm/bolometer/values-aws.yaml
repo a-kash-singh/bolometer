@@ -1,0 +1,74 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# values-aws.yaml — production EKS deployment example
+#
+# Prerequisites:
+#   1. An EKS cluster with IRSA configured (aws/irsa-setup.sh)
+#   2. The IAM role created from aws/iam-policy.json
+#   3. Your container registry has the bolometer image
+#
+# Usage:
+#   helm upgrade --install bolometer ./helm/bolometer \
+#     -n bolometer-system --create-namespace \
+#     -f ./helm/bolometer/values-aws.yaml \
+#     --set aws.irsa.roleArn=arn:aws:iam::ACCOUNT_ID:role/bolometer-role \
+#     --set image.repository=ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/bolometer \
+#     --set image.tag=0.1.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+image:
+  # Replace with your ECR repo (or any registry)
+  repository: "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/bolometer"
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Leader election — required in multi-replica or multi-node production clusters
+leaderElection:
+  enabled: true
+
+# ── IRSA — IAM Roles for Service Accounts ─────────────────────────────────────
+# The chart adds eks.amazonaws.com/role-arn to the ServiceAccount automatically.
+# Run aws/irsa-setup.sh to create the IAM role, or see DEVELOPER.md for the
+# manual steps.
+aws:
+  region: "us-west-2"     # set to the region where your S3 bucket lives
+
+  irsa:
+    enabled: true
+    roleArn: ""           # fill in: arn:aws:iam::ACCOUNT_ID:role/bolometer-role
+
+  # No static credentials — IRSA handles auth
+  staticCredentials:
+    enabled: false
+
+# Production resource sizing
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ── Example ProfilingConfig (optional) ────────────────────────────────────────
+# Uncomment to deploy a ProfilingConfig for your app via this Helm release.
+#
+# profilingConfig:
+#   create: true
+#   name: my-app-profiling
+#   namespace: production
+#   selector:
+#     namespace: production
+#     labelSelector:
+#       app: my-go-app
+#   thresholds:
+#     cpuThresholdPercent: 80
+#     memoryThresholdPercent: 90
+#     checkIntervalSeconds: 30
+#     cooldownSeconds: 300
+#   onDemand:
+#     enabled: false
+#   s3:
+#     bucket: my-pprof-bucket
+#     region: us-west-2
+#     prefix: profiles
+#   profileTypes: [heap, cpu, goroutine]

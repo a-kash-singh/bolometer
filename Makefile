@@ -101,6 +101,24 @@ helm-package: ## Package Helm chart.
 
 ##@ Dependencies
 
+.PHONY: test-e2e-local
+test-e2e-local: ## Run end-to-end tests locally using kind + MinIO (requires docker, kind, kubectl, helm).
+	./e2e-local.sh
+
+.PHONY: test-e2e-local-cleanup
+test-e2e-local-cleanup: ## Run end-to-end tests locally and delete the kind cluster when done.
+	./e2e-local.sh --cleanup
+
+.PHONY: e2e-inspect
+e2e-inspect: ## Inspect a running e2e cluster: watch logs, list MinIO profiles, validate pprof files.
+	./e2e-inspect.sh
+
+.PHONY: e2e-inspect-load
+e2e-inspect-load: ## Inspect with continuous load generation for 5 minutes.
+	./e2e-inspect.sh --watch=300 --generate-load
+
+##@ Dependencies
+
 .PHONY: deps
 deps: ## Download dependencies.
 	go mod download

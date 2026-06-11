@@ -35,6 +35,12 @@ type ProfilingConfigReconciler struct {
 	metricsCollector *metrics.Collector
 	profiler         *profiler.Profiler
 
+	// baseCtx is a long-lived context for monitoring goroutines. It must NOT be
+	// the per-request reconcile context, which is cancelled when Reconcile()
+	// returns. Individual monitors are cancelled via activeMonitors cancel funcs.
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+
 	// Track active monitoring goroutines
 	activeMonitors map[string]context.CancelFunc
 }
@@ -47,6 +53,7 @@ func NewProfilingConfigReconciler(
 	metricsClient metricsv.Interface,
 	restConfig *rest.Config,
 ) *ProfilingConfigReconciler {
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	return &ProfilingConfigReconciler{
 		Client:           client,
 		Scheme:           scheme,
@@ -56,6 +63,8 @@ func NewProfilingConfigReconciler(
 		podWatcher:       NewPodWatcher(clientset),
 		metricsCollector: metrics.NewCollector(metricsClient),
 		profiler:         profiler.NewProfiler(clientset, restConfig),
+		baseCtx:          baseCtx,
+		baseCancel:       baseCancel,
 		activeMonitors:   make(map[string]context.CancelFunc),
 	}
 }
@@ -109,10 +118,13 @@ func (r *ProfilingConfigReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		logger.Error(err, "Failed to update status")
 	}
 
-	// Start or update monitoring
+	// Start or update monitoring.
+	// NOTE: We pass r.baseCtx (not the request ctx) so goroutines survive
+	// Reconcile() returning. The request ctx is cancelled on return, which
+	// would immediately kill any in-flight profile capture.
 	configKey := req.NamespacedName.String()
 	r.stopMonitoring(configKey)
-	r.startMonitoring(ctx, config)
+	r.startMonitoring(r.baseCtx, config)
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
@@ -287,7 +299,21 @@ func (r *ProfilingConfigReconciler) validateConfig(config *profilingv1alpha1.Pro
 
 // SetupWithManager sets up the controller with the Manager
 func (r *ProfilingConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Cancel the base context (and all monitoring goroutines) when the manager stops.
+	if err := mgr.Add(runnableFunc(r.baseCancel)); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&profilingv1alpha1.ProfilingConfig{}).
 		Complete(r)
+}
+
+// runnableFunc adapts a func() into ctrl.Runnable so we can register the
+// baseCancel as a shutdown hook with the manager.
+type runnableFunc func()
+
+func (f runnableFunc) Start(ctx context.Context) error {
+	<-ctx.Done()  // block until manager signals shutdown
+	f()           // then cancel all monitoring goroutines
+	return nil
 }

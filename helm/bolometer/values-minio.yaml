@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# values-minio.yaml — local kind + MinIO end-to-end testing override
+#
+# Usage:
+#   helm upgrade --install bolometer ./helm/bolometer \
+#     -n bolometer-system --create-namespace \
+#     -f ./helm/bolometer/values-minio.yaml \
+#     --set image.tag=latest
+#
+# See e2e-local.sh for the full automated workflow.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Use the locally built image (loaded into kind by e2e-local.sh)
+image:
+  repository: bolometer
+  tag: "latest"
+  pullPolicy: Never     # image was loaded with `kind load docker-image` — don't pull
+
+# Single-node kind cluster: no leader election needed (also avoids needing
+# a lease CRD that kind may not have pre-installed)
+leaderElection:
+  enabled: false
+
+# Reduce resources — kind nodes have limited capacity
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Static credentials for MinIO (not IRSA — no AWS account needed locally)
+aws:
+  region: "us-east-1"
+  staticCredentials:
+    enabled: true
+    accessKeyId: "minioadmin"
+    secretAccessKey: "minioadmin"

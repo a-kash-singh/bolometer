@@ -6,25 +6,50 @@ image:
   pullPolicy: IfNotPresent
   tag: "latest"
 
-# Image pull secrets
 imagePullSecrets: []
 
 # Operator deployment configuration
 replicaCount: 1
 
-# Service account configuration
+nameOverride: ""
+fullnameOverride: ""
+
+# ── Service Account ───────────────────────────────────────────────────────────
 serviceAccount:
   create: true
+  # Extra annotations (merged with aws.irsa.roleArn if IRSA is enabled)
   annotations: {}
-    # For AWS IRSA (IAM Roles for Service Accounts)
-    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/bolometer-role
   name: "bolometer"
 
-# RBAC configuration
+# ── AWS Credentials ───────────────────────────────────────────────────────────
+aws:
+  # Default AWS region (injected as AWS_REGION env var)
+  region: "us-east-1"
+
+  # IRSA — IAM Roles for Service Accounts (recommended for EKS)
+  # Set irsa.enabled=true and irsa.roleArn to have the chart automatically
+  # add the eks.amazonaws.com/role-arn annotation to the ServiceAccount.
+  # See aws/irsa-setup.sh for the required IAM policy and trust relationship.
+  irsa:
+    enabled: false
+    roleArn: ""   # arn:aws:iam::ACCOUNT_ID:role/bolometer-role
+
+  # Static credentials — for MinIO or non-EKS environments.
+  # Creates a Secret and injects AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars.
+  # Use existingSecret to reference a pre-created Secret instead.
+  staticCredentials:
+    enabled: false
+    accessKeyId: ""
+    secretAccessKey: ""
+    existingSecret: ""                          # name of a pre-created Secret
+    existingSecretKeyId: "AWS_ACCESS_KEY_ID"    # key inside existingSecret
+    existingSecretKeySecret: "AWS_SECRET_ACCESS_KEY"
+
+# ── RBAC ──────────────────────────────────────────────────────────────────────
 rbac:
   create: true
 
-# Resources for the operator
+# ── Resources ─────────────────────────────────────────────────────────────────
 resources:
   limits:
     cpu: 500m
@@ -33,22 +58,16 @@ resources:
     cpu: 100m
     memory: 128Mi
 
-# Node selector
 nodeSelector: {}
-
-# Tolerations
 tolerations: []
-
-# Affinity
 affinity: {}
 
-# Pod security context
+# ── Security ──────────────────────────────────────────────────────────────────
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile:
     type: RuntimeDefault
 
-# Container security context
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
@@ -57,48 +76,51 @@ securityContext:
   runAsNonRoot: true
   runAsUser: 65532
 
-# Leader election
+# ── Operator Features ─────────────────────────────────────────────────────────
 leaderElection:
   enabled: true
 
-# Metrics configuration
 metrics:
   enabled: true
   port: 8080
 
-# Health probe configuration
 healthProbe:
   port: 8081
 
-# Namespace to deploy the operator
+# ── Namespace & CRD ───────────────────────────────────────────────────────────
 namespace: bolometer-system
 
-# CRD installation
 crd:
   install: true
 
-# Default profiling configuration (can be overridden per ProfilingConfig CR)
-defaultConfig:
-  # Default S3 configuration
-  s3:
-    bucket: ""
-    region: "us-west-2"
-    prefix: "profiles"
-    endpoint: ""
-  
-  # Default threshold configuration
+# ── ProfilingConfig (optional) ────────────────────────────────────────────────
+# Set create: true to deploy a ProfilingConfig CR alongside the operator.
+# Useful for GitOps / single-chart deployments.
+profilingConfig:
+  create: false
+  name: "default"
+  namespace: "default"    # target namespace (where your app lives)
+
+  selector:
+    namespace: "default"
+    labelSelector: {}     # e.g. { app: my-go-app }
+
   thresholds:
     cpuThresholdPercent: 80
     memoryThresholdPercent: 90
     checkIntervalSeconds: 30
     cooldownSeconds: 300
-  
-  # Default on-demand configuration
+
   onDemand:
     enabled: false
     intervalSeconds: 35
-  
-  # Default profile types
+
+  s3:
+    bucket: ""            # required when profilingConfig.create=true
+    region: "us-east-1"
+    prefix: "profiles"
+    endpoint: ""          # leave empty for AWS S3; set for MinIO / custom
+
   profileTypes:
     - heap
     - cpu
