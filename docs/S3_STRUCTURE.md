@@ -7,7 +7,7 @@ This document explains how profiles are organized in S3 storage.
 Profiles are stored in S3 with the following hierarchy:
 
 ```
-s3://{bucket}/{prefix}/{date}/{service-name}/{timestamp}-{profile-type}.pprof
+s3://{bucket}/{prefix}/{date}/{service-name}/{timestamp}-{pod-name}-{profile-type}.pprof
 ```
 
 ### Components
@@ -24,9 +24,24 @@ s3://{bucket}/{prefix}/{date}/{service-name}/{timestamp}-{profile-type}.pprof
 **Service Name**: Extracted intelligently from pod metadata
 - See service name extraction section below
 
-**Filename**: `{timestamp}-{profile-type}.pprof`
-- Timestamp: `YYYYMMDDHHmmss` format (20240115-120000)
+**Filename**: `{timestamp}-{pod-name}-{profile-type}.pprof`
+- Timestamp: `YYYYMMDD-HHmmss` format (`20240115-120000`). It comes first, so
+  a service's files sort chronologically.
+- Pod name: the pod the profile was captured from, e.g.
+  `my-web-app-7d8f9c5b6d-xyz456`. Replicas of a service are often profiled at
+  the same moment, and the pod name keeps their profiles from overwriting
+  each other.
 - Profile type: heap, cpu, goroutine, mutex
+
+To split a filename, take the first 15 characters as the timestamp and the
+part after the last `-` as the profile type. Whatever lies between is the pod
+name. Pod names contain `-`, but profile types never do.
+
+> **Layout change:** earlier versions wrote `{timestamp}-{profile-type}.pprof`
+> without the pod name. With that layout, replicas of a service profiled in
+> the same second overwrote each other's files. Objects uploaded before the
+> upgrade keep their old names. Tooling that parses filenames needs to handle
+> both forms. Patterns like `*-heap.pprof` match both.
 
 ## Example Structure
 
@@ -35,24 +50,27 @@ s3://my-profiling-bucket/
 ├── profiles/
 │   ├── 2024-01-15/
 │   │   ├── my-web-app/
-│   │   │   ├── 20240115-120000-heap.pprof
-│   │   │   ├── 20240115-120000-cpu.pprof
-│   │   │   ├── 20240115-120000-goroutine.pprof
-│   │   │   ├── 20240115-120000-mutex.pprof
-│   │   │   ├── 20240115-143000-heap.pprof
-│   │   │   └── 20240115-143000-cpu.pprof
+│   │   │   ├── 20240115-120000-my-web-app-7d8f9c5b6d-xyz456-heap.pprof
+│   │   │   ├── 20240115-120000-my-web-app-7d8f9c5b6d-xyz456-cpu.pprof
+│   │   │   ├── 20240115-120000-my-web-app-7d8f9c5b6d-abc123-heap.pprof
+│   │   │   ├── 20240115-120000-my-web-app-7d8f9c5b6d-abc123-cpu.pprof
+│   │   │   ├── 20240115-143000-my-web-app-7d8f9c5b6d-xyz456-heap.pprof
+│   │   │   └── 20240115-143000-my-web-app-7d8f9c5b6d-xyz456-cpu.pprof
 │   │   ├── payment-service/
-│   │   │   ├── 20240115-121500-heap.pprof
-│   │   │   └── 20240115-121500-cpu.pprof
+│   │   │   ├── 20240115-121500-payment-service-0-heap.pprof
+│   │   │   └── 20240115-121500-payment-service-0-cpu.pprof
 │   │   └── auth-service/
-│   │       ├── 20240115-130000-heap.pprof
-│   │       └── 20240115-130000-cpu.pprof
+│   │       ├── 20240115-130000-auth-service-5c9b7f-k2p4q-heap.pprof
+│   │       └── 20240115-130000-auth-service-5c9b7f-k2p4q-cpu.pprof
 │   └── 2024-01-16/
 │       ├── my-web-app/
-│       │   └── 20240116-090000-heap.pprof
+│       │   └── 20240116-090000-my-web-app-7d8f9c5b6d-abc123-heap.pprof
 │       └── payment-service/
-│           └── 20240116-092000-cpu.pprof
+│           └── 20240116-092000-payment-service-1-cpu.pprof
 ```
+
+At 12:00:00 both replicas of `my-web-app` (`...-xyz456` and `...-abc123`)
+were profiled together, and each has its own files.
 
 ## Service Name Extraction
 
@@ -202,6 +220,9 @@ aws s3 sync s3://bucket/profiles/2024-01-15/my-web-app/ ./my-web-app-profiles/
 
 # Search across dates for a service
 aws s3 ls s3://bucket/profiles/ --recursive | grep my-web-app
+
+# Find the profiles of one pod
+aws s3 ls s3://bucket/profiles/ --recursive | grep my-web-app-7d8f9c5b6d-xyz456
 ```
 
 ## Profile Metadata
@@ -212,18 +233,24 @@ Each profile includes S3 object metadata:
 pod-name: my-web-app-7d8f9c5b6d-xyz456
 pod-namespace: production
 profile-type: heap
-reason: threshold-exceeded
+reason: CPU usage 95.00% exceeds threshold 80%
 timestamp: 2024-01-15T12:00:00Z
 pod-label-app: my-web-app
 pod-label-version: v1.2.3
+pod-label-app.kubernetes.io_name: my-web-app
 ```
+
+Each pod label becomes a `pod-label-<key>` entry. Characters that aren't
+allowed in an HTTP header name (metadata is sent as `x-amz-meta-*` headers)
+are replaced with `_`. For example, `app.kubernetes.io/name` becomes
+`pod-label-app.kubernetes.io_name`.
 
 View metadata:
 
 ```bash
 aws s3api head-object \
   --bucket my-bucket \
-  --key profiles/2024-01-15/my-web-app/20240115-120000-heap.pprof
+  --key profiles/2024-01-15/my-web-app/20240115-120000-my-web-app-7d8f9c5b6d-xyz456-heap.pprof
 ```
 
 ## Best Practices
@@ -323,7 +350,8 @@ aws s3 sync s3://bucket/profiles/2024-01-15/my-app/ ./day1/ --exclude "*" --incl
 aws s3 sync s3://bucket/profiles/2024-01-16/my-app/ ./day2/ --exclude "*" --include "*-cpu.pprof"
 
 # Compare with pprof
-go tool pprof -base=day1/20240115-120000-cpu.pprof day2/20240116-120000-cpu.pprof
+go tool pprof -base=day1/20240115-120000-my-app-7d8f9c5b6d-xyz456-cpu.pprof \
+  day2/20240116-120000-my-app-7d8f9c5b6d-abc123-cpu.pprof
 ```
 
 ### Analyze All Profiles for a Date
@@ -333,7 +361,7 @@ go tool pprof -base=day1/20240115-120000-cpu.pprof day2/20240116-120000-cpu.ppro
 aws s3 sync s3://bucket/profiles/2024-01-15/ ./analysis/
 
 # Find memory leaks
-for file in analysis/*/heap.pprof; do
+for file in analysis/*/*-heap.pprof; do
   echo "Analyzing $file"
   go tool pprof -top "$file"
 done
@@ -361,7 +389,7 @@ If you have existing profiles with a different structure, use AWS CLI to reorgan
 ```bash
 # Example: migrate from old structure to new structure
 # Old: s3://bucket/namespace/pod-name/timestamp/type.pprof
-# New: s3://bucket/date/service-name/timestamp-type.pprof
+# New: s3://bucket/date/service-name/timestamp-pod-name-type.pprof
 
 # This requires custom scripting based on your specific old structure
 ```
@@ -391,7 +419,7 @@ The operator uses the first matching label/reference. To override, ensure your p
 Check operator logs:
 
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator | grep S3
+kubectl logs -n bolometer-system -l app=bolometer | grep S3
 ```
 
 Verify S3 path:

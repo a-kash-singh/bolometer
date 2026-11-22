@@ -182,7 +182,7 @@ kubectl apply -f examples/target-app.yaml
 
 # Create ProfilingConfig
 cat <<EOF | kubectl apply -f -
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: test-profiling
@@ -315,10 +315,10 @@ pkill -f "port-forward.*6060"
 cd /Users/akashsingh/Code/k8s-operator
 
 # Build operator image
-make docker-build IMG=profiling-operator:test
+make docker-build IMG=bolometer:test
 
 # Load into kind
-kind load docker-image profiling-operator:test --name profiling-test
+kind load docker-image bolometer:test --name profiling-test
 
 # Install CRDs
 kubectl apply -f config/crd/
@@ -330,7 +330,7 @@ kubectl apply -f config/rbac/
 kubectl apply -f config/manager/
 
 # Check operator logs
-kubectl logs -n profiling-system -l app=profiling-operator -f
+kubectl logs -n bolometer-system -l app=bolometer -f
 ```
 
 ## End-to-End Testing
@@ -361,8 +361,8 @@ spec:
         app: test-app
         app.kubernetes.io/name: test-app
       annotations:
-        profiling.io/enabled: "true"
-        profiling.io/port: "6060"
+        bolometer.io/enabled: "true"
+        bolometer.io/port: "6060"
     spec:
       containers:
       - name: app
@@ -388,7 +388,7 @@ kubectl wait --for=condition=ready --timeout=120s pod -l app=test-app -n profili
 For AWS:
 ```bash
 # Create S3 bucket
-aws s3 mb s3://profiling-operator-test --region us-west-2
+aws s3 mb s3://bolometer-test --region us-west-2
 
 # Set up IRSA (if on EKS)
 # See docs/IRSA_SETUP.md
@@ -407,7 +407,7 @@ kubectl run aws-cli --rm -i --tty --image=amazon/aws-cli -- \
 
 ```bash
 cat <<EOF | kubectl apply -f -
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: test-config
@@ -461,7 +461,7 @@ kubectl get profilingconfig -n profiling-test
 kubectl describe profilingconfig test-config -n profiling-test
 
 # Check operator logs
-kubectl logs -n profiling-system -l app=profiling-operator --tail=100
+kubectl logs -n bolometer-system -l app=bolometer --tail=100
 
 # Look for:
 # - "Found matching pods"
@@ -496,7 +496,7 @@ kubectl patch profilingconfig test-config -n profiling-test --type=merge -p '
 }'
 
 # Wait and observe logs
-kubectl logs -n profiling-system -l app=profiling-operator -f
+kubectl logs -n bolometer-system -l app=bolometer -f
 
 # Should see:
 # - "On-demand profiling" messages every ~35 seconds
@@ -598,7 +598,7 @@ NC='\033[0m'
 
 # Configuration
 NAMESPACE="profiling-test"
-OPERATOR_NS="profiling-system"
+OPERATOR_NS="bolometer-system"
 
 echo "1. Creating test namespace..."
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
@@ -629,7 +629,7 @@ kubectl apply -f config/rbac/
 kubectl apply -f config/manager/
 
 echo "6. Waiting for operator..."
-kubectl wait --for=condition=available --timeout=300s deployment/profiling-operator -n $OPERATOR_NS
+kubectl wait --for=condition=available --timeout=300s deployment/bolometer -n $OPERATOR_NS
 
 echo "7. Creating ProfilingConfig..."
 kubectl apply -f config/samples/profiling_v1alpha1_profilingconfig.yaml
@@ -640,7 +640,7 @@ kubectl get profilingconfig -A
 kubectl describe profilingconfig -n default
 
 echo "9. Checking operator logs..."
-kubectl logs -n $OPERATOR_NS -l app=profiling-operator --tail=50
+kubectl logs -n $OPERATOR_NS -l app=bolometer --tail=50
 
 echo -e "${GREEN}=== E2E Test Complete ===${NC}"
 echo "Check S3 bucket for uploaded profiles"
@@ -673,16 +673,16 @@ kubectl port-forward <pod> 6060:6060
 curl http://localhost:6060/debug/pprof/
 
 # Check operator has permission
-kubectl auth can-i create pods/portforward --as=system:serviceaccount:profiling-system:profiling-operator
+kubectl auth can-i create pods/portforward --as=system:serviceaccount:bolometer-system:bolometer
 ```
 
 **S3 upload fails:**
 ```bash
 # Check credentials (IRSA)
-kubectl get sa profiling-operator -n profiling-system -o yaml
+kubectl get sa bolometer -n bolometer-system -o yaml
 
 # Check operator logs for AWS errors
-kubectl logs -n profiling-system -l app=profiling-operator | grep -i s3
+kubectl logs -n bolometer-system -l app=bolometer | grep -i s3
 ```
 
 ## Cleanup
@@ -729,7 +729,7 @@ jobs:
       run: make build
     
     - name: Docker build
-      run: make docker-build IMG=profiling-operator:test
+      run: make docker-build IMG=bolometer:test
 ```
 
 ## Next Steps

@@ -20,7 +20,7 @@ The script validates before installation:
 
 Prompts for all required configuration:
 - Installation mode (production vs LocalStack)
-- Namespace (default: profiling-system)
+- Namespace (default: bolometer-system)
 - Container image (with warning for local images)
 - S3 bucket name
 - AWS region
@@ -65,7 +65,7 @@ Validates successful installation:
 ```bash
 ./install.sh \
   --namespace my-namespace \
-  --image ghcr.io/org/profiling-operator:v0.1.0 \
+  --image ghcr.io/org/bolometer:v0.1.0 \
   --skip-aws-validation
 ```
 
@@ -126,23 +126,23 @@ Installation mode:
   2) LocalStack (for local testing)
 Select mode [1]: 1
 
-Namespace [profiling-system]:
-Container image [profiling-operator:latest]: ghcr.io/myorg/profiling-operator:v0.1.0
+Namespace [bolometer-system]:
+Container image [bolometer:latest]: ghcr.io/myorg/bolometer:v0.1.0
 
 [INFO] S3 Configuration (required for profile storage)
 S3 bucket name: my-profiling-bucket
 AWS region [us-west-2]:
-IAM Role ARN: arn:aws:iam::123456789012:role/profiling-operator-role
+IAM Role ARN: arn:aws:iam::123456789012:role/bolometer-role
 
 ======================================
 Installation Summary
 ======================================
 
-Namespace:          profiling-system
-Image:              ghcr.io/myorg/profiling-operator:v0.1.0
+Namespace:          bolometer-system
+Image:              ghcr.io/myorg/bolometer:v0.1.0
 S3 Bucket:          my-profiling-bucket
 AWS Region:         us-west-2
-IAM Role ARN:       arn:aws:iam::123456789012:role/profiling-operator-role
+IAM Role ARN:       arn:aws:iam::123456789012:role/bolometer-role
 
 Proceed with installation? (y/n): y
 
@@ -150,14 +150,14 @@ Proceed with installation? (y/n): y
 Installing Operator
 ======================================
 
-[INFO] Creating namespace profiling-system...
-[SUCCESS] Namespace profiling-system created
+[INFO] Creating namespace bolometer-system...
+[SUCCESS] Namespace bolometer-system created
 [INFO] Installing Custom Resource Definitions...
 [SUCCESS] CRDs installed
 [INFO] Waiting for CRD to be established...
 [SUCCESS] CRD is ready
 [INFO] Creating service account...
-[INFO] Adding IRSA annotation: arn:aws:iam::123456789012:role/profiling-operator-role
+[INFO] Adding IRSA annotation: arn:aws:iam::123456789012:role/bolometer-role
 [SUCCESS] Service account created
 [INFO] Installing RBAC resources...
 [SUCCESS] RBAC resources installed
@@ -174,8 +174,8 @@ Validating Installation
 [SUCCESS] Deployment is running with 1 ready replicas
 [INFO] Checking pod status...
 NAME                                  READY   STATUS    RESTARTS   AGE
-profiling-operator-7d9f8b5c6d-x7z9m   1/1     Running   0          45s
-[SUCCESS] Pod profiling-operator-7d9f8b5c6d-x7z9m is running
+bolometer-7d9f8b5c6d-x7z9m   1/1     Running   0          45s
+[SUCCESS] Pod bolometer-7d9f8b5c6d-x7z9m is running
 [INFO] Checking health endpoint...
 [SUCCESS] Health endpoint is responding
 [INFO] Checking CRD...
@@ -191,16 +191,16 @@ Next steps:
    kubectl apply -f config/samples/profiling_v1alpha1_profilingconfig.yaml
 
 2. Annotate your Go application pods:
-   kubectl annotate pod <pod-name> profiling.io/enabled=true
+   kubectl annotate pod <pod-name> bolometer.io/enabled=true
 
 3. Monitor the operator logs:
-   kubectl logs -n profiling-system -l app=profiling-operator -f
+   kubectl logs -n bolometer-system -l app=bolometer -f
 
 4. Check ProfilingConfig status:
    kubectl get profilingconfigs -A
 
 5. View operator metrics:
-   kubectl port-forward -n profiling-system svc/profiling-operator-metrics 8080:8080
+   kubectl port-forward -n bolometer-system svc/bolometer-metrics 8080:8080
    curl http://localhost:8080/metrics
 
 Documentation:
@@ -258,12 +258,12 @@ Continue installation anyway? (y/n):
 [WARNING] Deployment did not become available within 120 seconds
 [INFO] Checking pod status...
 NAME                                  READY   STATUS             RESTARTS   AGE
-profiling-operator-7d9f8b5c6d-x7z9m   0/1     ImagePullBackOff   0          2m
+bolometer-7d9f8b5c6d-x7z9m   0/1     ImagePullBackOff   0          2m
 
 [INFO] Checking recent events...
 ...
 
-[WARNING] Please check the logs with: kubectl logs -n profiling-system -l app=profiling-operator
+[WARNING] Please check the logs with: kubectl logs -n bolometer-system -l app=bolometer
 ```
 
 ## Testing Recommendations
@@ -280,7 +280,7 @@ kubectl patch deployment metrics-server -n kube-system --type='json' \
 
 # Build and load image
 make docker-build
-kind load docker-image profiling-operator:latest
+kind load docker-image bolometer:latest
 
 # Deploy LocalStack
 kubectl apply -f examples/localstack.yaml

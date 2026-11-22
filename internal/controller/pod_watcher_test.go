@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,23 +164,43 @@ func TestPodWatcher_TrackPod_ReplaceExisting(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	watcher := NewPodWatcher(clientset)
 
+	config := createTestProfilingConfig("config-1", "default")
+
+	// Track, then track again with a newer copy of the same pod (as a later
+	// reconcile does): the entry is replaced, not duplicated.
+	watcher.TrackPod(createTestPod("pod-1", "default", true), config)
+	updated := createTestPod("pod-1", "default", true)
+	updated.Labels["version"] = "2"
+	watcher.TrackPod(updated, config)
+
+	tracked := watcher.GetTrackedPods()
+	if len(tracked) != 1 {
+		t.Fatalf("Expected 1 tracked pod, got %d", len(tracked))
+	}
+	if tracked[0].Pod.Labels["version"] != "2" {
+		t.Errorf("Expected the tracked pod to be replaced by the newer copy")
+	}
+}
+
+// A pod selected by two configs is tracked separately for each; tracking it
+// for one config must not take it away from the other.
+func TestPodWatcher_TrackPod_SeparatePerConfig(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
 	pod := createTestPod("pod-1", "default", true)
 	config1 := createTestProfilingConfig("config-1", "default")
 	config2 := createTestProfilingConfig("config-2", "default")
 
-	// Track with first config
 	watcher.TrackPod(pod, config1)
-
-	// Track again with second config (should replace)
 	watcher.TrackPod(pod, config2)
 
-	tracked := watcher.GetTrackedPods()
-	if len(tracked) != 1 {
-		t.Errorf("Expected 1 tracked pod, got %d", len(tracked))
+	for _, cfg := range []string{"default/config-1", "default/config-2"} {
+		tracked := watcher.GetTrackedPodsForConfig(cfg)
+		if len(tracked) != 1 || tracked[0].Pod.Name != "pod-1" || configKeyOf(tracked[0].Config) != cfg {
+			t.Errorf("%s: expected exactly pod-1 tracked for it, got %d entries", cfg, len(tracked))
+		}
 	}
-
-	if len(tracked) > 0 && tracked[0].Config.Name != "config-2" {
-		t.Errorf("Expected config 'config-2', got '%s'", tracked[0].Config.Name)
+	if n := watcher.GetActivePodCount(); n != 1 {
+		t.Errorf("Expected 1 distinct active pod, got %d", n)
 	}
 }
 
@@ -434,4 +456,249 @@ func TestPodWatcher_ConcurrentAccess(t *testing.T) {
 	<-done
 
 	// If we get here without deadlock or race, the test passes
+}
+
+// Reconcile re-tracks every matching pod; that used to wipe the pod's
+// cooldown, allowing it to be profiled again immediately.
+func TestPodWatcher_TrackPod_PreservesCooldown(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	config := createTestProfilingConfig("test-config", "default")
+	pod := createTestPod("pod-1", "default", true)
+
+	watcher.TrackPod(pod, config)
+	watcher.UpdateLastProfileTime(pod)
+
+	// Same pod as returned by a later List.
+	watcher.TrackPod(createTestPod("pod-1", "default", true), config)
+
+	if watcher.CanProfile(pod, 300) {
+		t.Error("re-tracking the pod reset its cooldown")
+	}
+}
+
+func TestPodWatcher_StopTrackingPod_ClearsCooldown(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	config := createTestProfilingConfig("test-config", "default")
+	pod := createTestPod("pod-1", "default", true)
+
+	watcher.TrackPod(pod, config)
+	watcher.UpdateLastProfileTime(pod)
+	watcher.StopTrackingPod(pod)
+
+	if !watcher.CanProfile(pod, 300) {
+		t.Error("expected cooldown to be cleared once the pod is no longer tracked")
+	}
+}
+
+func TestPodWatcher_TryStartCapture(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	pod := createTestPod("pod-1", "default", true)
+	other := createTestPod("pod-2", "default", true)
+
+	if !watcher.TryStartCapture(pod) {
+		t.Fatal("first capture of pod should start")
+	}
+	if watcher.TryStartCapture(pod) {
+		t.Fatal("second concurrent capture of the same pod should be refused")
+	}
+	if !watcher.TryStartCapture(other) {
+		t.Fatal("capture of a different pod should start")
+	}
+	watcher.FinishCapture(pod)
+	if !watcher.TryStartCapture(pod) {
+		t.Fatal("capture should start again after FinishCapture")
+	}
+}
+
+func podNames(tracked []*TrackedPod) []string {
+	var names []string
+	for _, tp := range tracked {
+		names = append(names, tp.Pod.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestPodWatcher_SyncPods(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	config := createTestProfilingConfig("config-1", "default")
+	pod0 := createTestPod("pod-0", "default", true)
+	pod1 := createTestPod("pod-1", "default", true)
+	pod2 := createTestPod("pod-2", "default", true)
+
+	watcher.SyncPods(config, []*corev1.Pod{pod0, pod1})
+	watcher.UpdateLastProfileTime(pod0)
+	watcher.UpdateLastProfileTime(pod1)
+
+	// pod-1 is gone, pod-2 is new.
+	watcher.SyncPods(config, []*corev1.Pod{createTestPod("pod-0", "default", true), pod2})
+
+	if got := podNames(watcher.GetTrackedPodsForConfig("default/config-1")); strings.Join(got, ",") != "pod-0,pod-2" {
+		t.Fatalf("tracked pods: got %v, want [pod-0 pod-2]", got)
+	}
+	if watcher.CanProfile(pod0, 300) {
+		t.Error("pod-0 is still selected; its cooldown must be kept")
+	}
+	if !watcher.CanProfile(pod1, 300) {
+		t.Error("pod-1 was dropped; its cooldown state must be dropped too")
+	}
+
+	// An empty selection drops everything, including the config's entry.
+	watcher.SyncPods(config, nil)
+	if n := len(watcher.GetTrackedPods()); n != 0 {
+		t.Errorf("expected no tracked pods, got %d", n)
+	}
+	if n := len(watcher.trackedPods) + len(watcher.lastProfileTime); n != 0 {
+		t.Errorf("expected no retained state, got %d trackedPods and lastProfileTime entries", n)
+	}
+}
+
+// A pod dropped by one config but still selected by another keeps its
+// cooldown; it is released once the last config drops it.
+func TestPodWatcher_SharedPodCooldownReleasedWithLastConfig(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	pod := createTestPod("pod-0", "default", true)
+	config1 := createTestProfilingConfig("config-1", "default")
+	config2 := createTestProfilingConfig("config-2", "default")
+
+	watcher.SyncPods(config1, []*corev1.Pod{pod})
+	watcher.SyncPods(config2, []*corev1.Pod{pod})
+	watcher.UpdateLastProfileTime(pod)
+
+	watcher.SyncPods(config1, nil)
+	if watcher.CanProfile(pod, 300) {
+		t.Error("config-2 still tracks the pod; its cooldown must be kept")
+	}
+	if got := podNames(watcher.GetTrackedPodsForConfig("default/config-2")); len(got) != 1 {
+		t.Errorf("config-2 should still track the pod, got %v", got)
+	}
+
+	watcher.UntrackConfig("default/config-2")
+	if !watcher.CanProfile(pod, 300) {
+		t.Error("no config tracks the pod any more; its cooldown state must be dropped")
+	}
+	if n := len(watcher.GetTrackedPods()); n != 0 {
+		t.Errorf("expected no tracked pods, got %d", n)
+	}
+}
+
+func TestPodWatcher_UntrackConfig_LeavesOtherConfigsAlone(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	configA := createTestProfilingConfig("config-a", "default")
+	configB := createTestProfilingConfig("config-b", "default")
+	watcher.SyncPods(configA, []*corev1.Pod{createTestPod("a-0", "default", true)})
+	watcher.SyncPods(configB, []*corev1.Pod{createTestPod("b-0", "default", true)})
+
+	watcher.UntrackConfig("default/config-a")
+
+	if got := podNames(watcher.GetTrackedPods()); strings.Join(got, ",") != "b-0" {
+		t.Errorf("tracked pods: got %v, want [b-0]", got)
+	}
+	if got := watcher.GetTrackedPodsForConfig("default/config-a"); len(got) != 0 {
+		t.Errorf("config-a should track nothing, got %d pods", len(got))
+	}
+}
+
+func TestPodWatcher_StopTrackingPod_AllConfigs(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	pod := createTestPod("pod-0", "default", true)
+	watcher.TrackPod(pod, createTestProfilingConfig("config-1", "default"))
+	watcher.TrackPod(pod, createTestProfilingConfig("config-2", "default"))
+	watcher.UpdateLastProfileTime(pod)
+
+	watcher.StopTrackingPod(pod)
+
+	if n := len(watcher.GetTrackedPods()); n != 0 {
+		t.Errorf("expected the pod to be untracked for every config, got %d entries", n)
+	}
+	if !watcher.CanProfile(pod, 300) {
+		t.Error("expected the pod's cooldown state to be dropped")
+	}
+}
+
+func TestPodWatcher_IsCapturing(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	pod := createTestPod("pod-0", "default", true)
+
+	if watcher.IsCapturing(pod) {
+		t.Fatal("no capture started yet")
+	}
+	watcher.TryStartCapture(pod)
+	if !watcher.IsCapturing(pod) {
+		t.Fatal("expected capture in flight")
+	}
+	watcher.FinishCapture(pod)
+	if watcher.IsCapturing(pod) {
+		t.Fatal("expected no capture in flight after FinishCapture")
+	}
+}
+
+// A capture can finish after its pod stopped being tracked (deleted, no
+// longer matching, config deleted). The cooldown it records must not be left
+// behind once the capture is released.
+func TestPodWatcher_FinishCapture_DropsCooldownOfUntrackedPod(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	config := createTestProfilingConfig("config-1", "default")
+	gone := createTestPod("gone", "default", true)
+	kept := createTestPod("kept", "default", true)
+	watcher.SyncPods(config, []*corev1.Pod{gone, kept})
+
+	watcher.TryStartCapture(gone)
+	watcher.TryStartCapture(kept)
+	watcher.SyncPods(config, []*corev1.Pod{kept}) // "gone" dropped mid-capture
+	watcher.UpdateLastProfileTime(gone)
+	watcher.UpdateLastProfileTime(kept)
+	watcher.FinishCapture(gone)
+	watcher.FinishCapture(kept)
+
+	if _, held := watcher.lastProfileTime["default/gone"]; held {
+		t.Error("cooldown of the untracked pod was left behind")
+	}
+	if watcher.CanProfile(kept, 300) {
+		t.Error("cooldown of the still-tracked pod must be kept")
+	}
+}
+
+// Pods are returned least recently attempted first (never attempted first),
+// then by name, so a capture limit rotates through them.
+func TestPodWatcher_GetTrackedPodsForConfig_LeastRecentlyAttemptedFirst(t *testing.T) {
+	watcher := NewPodWatcher(fake.NewSimpleClientset())
+	clk := newFakeClock()
+	watcher.clock = clk
+	config := createTestProfilingConfig("config-1", "default")
+	var pods []*corev1.Pod
+	for _, name := range []string{"d", "c", "b", "a"} {
+		pods = append(pods, createTestPod(name, "default", true))
+	}
+	watcher.SyncPods(config, pods)
+
+	order := func() string {
+		return strings.Join(func() (names []string) {
+			for _, tp := range watcher.GetTrackedPodsForConfig("default/config-1") {
+				names = append(names, tp.Pod.Name)
+			}
+			return
+		}(), ",")
+	}
+	if got := order(); got != "a,b,c,d" {
+		t.Fatalf("never attempted: got %s, want a,b,c,d", got)
+	}
+
+	attempt := func(name string) {
+		pod := createTestPod(name, "default", true)
+		watcher.TryStartCapture(pod)
+		watcher.FinishCapture(pod)
+		clk.Step(time.Second)
+	}
+	attempt("a")
+	attempt("c")
+	if got := order(); got != "b,d,a,c" {
+		t.Fatalf("after capturing a then c: got %s, want b,d,a,c", got)
+	}
+	attempt("b")
+	attempt("d")
+	attempt("a")
+	if got := order(); got != "c,b,d,a" {
+		t.Fatalf("got %s, want c,b,d,a", got)
+	}
 }

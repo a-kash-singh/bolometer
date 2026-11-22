@@ -37,7 +37,7 @@ eksctl utils associate-iam-oidc-provider \
 ## Step 2: Create S3 Bucket
 
 ```bash
-export S3_BUCKET=profiling-operator-profiles
+export S3_BUCKET=bolometer-profiles
 export AWS_REGION=us-west-2
 
 aws s3 mb s3://${S3_BUCKET} --region ${AWS_REGION}
@@ -81,7 +81,7 @@ Create the policy document:
 ```bash
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-cat > profiling-operator-policy.json <<EOF
+cat > bolometer-s3-policy.json <<EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -108,7 +108,7 @@ Create the policy:
 ```bash
 aws iam create-policy \
   --policy-name ProfilingOperatorS3Policy \
-  --policy-document file://profiling-operator-policy.json \
+  --policy-document file://bolometer-s3-policy.json \
   --description "Policy for Profiling Operator to upload profiles to S3"
 
 export POLICY_ARN=arn:aws:iam::${ACCOUNT_ID}:policy/ProfilingOperatorS3Policy
@@ -121,8 +121,8 @@ Get cluster OIDC ID:
 ```bash
 export CLUSTER_NAME=your-cluster-name
 export OIDC_ID=$(aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query "cluster.identity.oidc.issuer" --output text | cut -d '/' -f 5)
-export NAMESPACE=profiling-system
-export SERVICE_ACCOUNT=profiling-operator
+export NAMESPACE=bolometer-system
+export SERVICE_ACCOUNT=bolometer
 ```
 
 Create trust policy:
@@ -174,7 +174,7 @@ aws iam attach-role-policy \
 ### Using Helm
 
 ```bash
-helm install profiling-operator ./helm/profiling-operator \
+helm install bolometer ./helm/bolometer \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${ROLE_ARN}" \
   --set defaultConfig.s3.bucket="${S3_BUCKET}" \
   --set defaultConfig.s3.region="${AWS_REGION}" \
@@ -190,8 +190,8 @@ helm install profiling-operator ./helm/profiling-operator \
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: profiling-operator
-  namespace: profiling-system
+  name: bolometer
+  namespace: bolometer-system
   annotations:
     eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/ProfilingOperatorRole
 ```
@@ -209,7 +209,7 @@ kubectl apply -f config/manager/
 Check the service account:
 
 ```bash
-kubectl get sa profiling-operator -n profiling-system -o yaml
+kubectl get sa bolometer -n bolometer-system -o yaml
 ```
 
 Verify the annotation is present:
@@ -222,7 +222,7 @@ annotations:
 Check the pod has the correct environment variables:
 
 ```bash
-kubectl get pod -n profiling-system -l app=profiling-operator -o jsonpath='{.items[0].spec.containers[0].env}'
+kubectl get pod -n bolometer-system -l app=bolometer -o jsonpath='{.items[0].spec.containers[0].env}'
 ```
 
 You should see AWS-related environment variables injected by the webhook.
@@ -232,7 +232,7 @@ You should see AWS-related environment variables injected by the webhook.
 Create a test ProfilingConfig:
 
 ```yaml
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: test-profiling
@@ -244,7 +244,7 @@ spec:
     cpuThresholdPercent: 80
     memoryThresholdPercent: 90
   s3Config:
-    bucket: profiling-operator-profiles
+    bucket: bolometer-profiles
     region: us-west-2
     prefix: test-profiles
   profileTypes:
@@ -254,7 +254,7 @@ spec:
 Monitor operator logs:
 
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator -f
+kubectl logs -n bolometer-system -l app=bolometer -f
 ```
 
 Look for successful S3 operations or permission errors.
@@ -277,7 +277,7 @@ Look for successful S3 operations or permission errors.
 ### Check AWS credentials in pod
 
 ```bash
-kubectl exec -n profiling-system -it deployment/profiling-operator -- sh
+kubectl exec -n bolometer-system -it deployment/bolometer -- sh
 
 # Inside the pod (if shell is available)
 env | grep AWS

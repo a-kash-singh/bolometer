@@ -44,8 +44,8 @@ go test ./... -race
 
 2. **Build and deploy operator**
    ```bash
-   make docker-build IMG=profiling-operator:test
-   kind load docker-image profiling-operator:test --name profiling-test
+   make docker-build IMG=bolometer:test
+   kind load docker-image bolometer:test --name profiling-test
    kubectl apply -f config/crd/
    kubectl apply -f config/rbac/
    kubectl apply -f config/manager/
@@ -68,7 +68,7 @@ go test ./... -race
    ```bash
    kubectl port-forward -n demo deployment/demo-go-app 8080:8080 &
    for i in {1..50}; do curl http://localhost:8080/load & done
-   kubectl logs -n profiling-system -l app=profiling-operator -f
+   kubectl logs -n bolometer-system -l app=bolometer -f
    ```
 
 ## Test Results
@@ -160,7 +160,7 @@ done
 # Create ProfilingConfig for each
 for i in {1..10}; do
   cat <<EOF | kubectl apply -f -
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: test-$i
@@ -179,7 +179,7 @@ EOF
 done
 
 # Monitor operator resource usage
-kubectl top pod -n profiling-system
+kubectl top pod -n bolometer-system
 ```
 
 ## Continuous Integration
@@ -202,7 +202,7 @@ jobs:
     - name: Build
       run: make build
     - name: Docker build
-      run: make docker-build IMG=profiling-operator:test
+      run: make docker-build IMG=bolometer:test
 ```
 
 ## Test Coverage

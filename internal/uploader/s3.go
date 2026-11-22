@@ -3,8 +3,10 @@ package uploader
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -57,6 +59,17 @@ func NewS3Uploader(ctx context.Context, cfg S3Config) (*S3Uploader, error) {
 	}, nil
 }
 
+// ForDestination returns an uploader that uploads to bucket and prefix
+// through the same S3 client (and thus the same credentials and
+// connections). A client is bound to a region and endpoint only, so a bucket
+// or prefix change does not need a new one.
+func (u *S3Uploader) ForDestination(bucket, prefix string) *S3Uploader {
+	c := *u
+	c.bucket = bucket
+	c.prefix = prefix
+	return &c
+}
+
 // UploadProfile uploads a single profile to S3
 func (u *S3Uploader) UploadProfile(ctx context.Context, pod *corev1.Pod, profile profiler.Profile, reason string) error {
 	key := u.generateKey(pod, profile)
@@ -72,9 +85,7 @@ func (u *S3Uploader) UploadProfile(ctx context.Context, pod *corev1.Pod, profile
 
 	// Add pod labels as metadata
 	for k, v := range pod.Labels {
-		// S3 metadata keys must be lowercase and cannot contain special chars
-		safeKey := fmt.Sprintf("pod-label-%s", k)
-		metadata[safeKey] = v
+		metadata[metadataKey("pod-label-"+k)] = v
 	}
 
 	// Upload to S3
@@ -93,28 +104,53 @@ func (u *S3Uploader) UploadProfile(ctx context.Context, pod *corev1.Pod, profile
 	return nil
 }
 
-// UploadProfiles uploads multiple profiles to S3
-func (u *S3Uploader) UploadProfiles(ctx context.Context, pod *corev1.Pod, profiles []profiler.Profile, reason string) error {
+// metadataKey makes s usable as an S3 user-metadata key. Metadata is sent as
+// x-amz-meta-* HTTP headers, so the key must be a valid header field name;
+// label keys such as "app.kubernetes.io/name" are not (the '/'), and the SDK
+// refuses to send the request. Invalid characters are replaced with '_'.
+func metadataKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", r):
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+}
+
+// UploadProfiles uploads multiple profiles to S3. It attempts every profile
+// even if some uploads fail, and returns how many were uploaded together with
+// the errors of the failed ones.
+func (u *S3Uploader) UploadProfiles(ctx context.Context, pod *corev1.Pod, profiles []profiler.Profile, reason string) (uploaded int, err error) {
+	var errs []error
 	for _, profile := range profiles {
 		if err := u.UploadProfile(ctx, pod, profile, reason); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("%s profile: %w", profile.Type, err))
+			continue
 		}
+		uploaded++
 	}
-	return nil
+	return uploaded, errors.Join(errs...)
 }
 
 // generateKey generates the S3 key for a profile
 func (u *S3Uploader) generateKey(pod *corev1.Pod, profile profiler.Profile) string {
-	// Format: {prefix}/{date}/{service-name}/{timestamp}-{profile-type}.pprof
+	// Format: {prefix}/{date}/{service-name}/{timestamp}-{pod-name}-{profile-type}.pprof
 	// Date format: YYYY-MM-DD
 	date := profile.Timestamp.Format("2006-01-02")
 
 	// Extract service name from pod labels (app, app.kubernetes.io/name, or fallback to pod name prefix)
 	serviceName := u.getServiceName(pod)
 
-	// Timestamp for uniqueness
+	// The timestamp (fixed width, first, so files sort by time) alone is not
+	// unique: replicas of a service are often captured at the same moment.
+	// The pod name tells them apart. Pod names contain '-' but profile types
+	// do not, so the type is whatever follows the last '-'.
 	timestamp := profile.Timestamp.Format("20060102-150405")
-	filename := fmt.Sprintf("%s-%s.pprof", timestamp, profile.Type)
+	filename := fmt.Sprintf("%s-%s-%s.pprof", timestamp, pod.Name, profile.Type)
 
 	parts := []string{
 		u.prefix,

@@ -7,11 +7,11 @@ Bolometer is a Kubernetes operator that captures Go pprof profiles when your app
 ## Features
 
 - **Threshold-based Profiling**: Automatically captures profiles when CPU or memory usage exceeds configured thresholds
-- **On-demand Profiling**: Continuous profiling at configurable intervals (30-40 seconds)
+- **On-demand Profiling**: Continuous profiling at configurable intervals (30-60 seconds)
 - **Multiple Profile Types**: Supports heap, CPU, goroutine, and mutex profiles
 - **S3 Integration**: Uploads profiles to S3 with structured naming and metadata
 - **IRSA Support**: Uses IAM Roles for Service Accounts for secure AWS authentication
-- **Annotation-based**: Target pods using `profiling.io/enabled: "true"` annotation
+- **Annotation-based**: Target pods using `bolometer.io/enabled: "true"` annotation
 - **Cooldown Period**: Prevents excessive profiling with configurable cooldown
 - **Label Selection**: Filter target pods by namespace and labels
 
@@ -27,7 +27,7 @@ bolometer/
 │   └── main.go                             # Operator entry point
 ├── config/                                 # Kubernetes manifests
 │   ├── crd/
-│   │   └── profiling.io_profilingconfigs.yaml  # CRD definition
+│   │   └── bolometer.io_profilingconfigs.yaml  # CRD definition
 │   ├── manager/
 │   │   ├── deployment.yaml                 # Operator deployment
 │   │   └── kustomization.yaml              # Kustomize config
@@ -252,8 +252,8 @@ kind: Pod
 metadata:
   name: my-go-app
   annotations:
-    profiling.io/enabled: "true"
-    profiling.io/port: "6060"  # Optional, defaults to 6060
+    bolometer.io/enabled: "true"
+    bolometer.io/port: "6060"  # Optional, defaults to 6060
 spec:
   containers:
   - name: app
@@ -284,15 +284,15 @@ func main() {
 
 ### Key Annotations
 
-- `profiling.io/enabled: "true"` - Enable profiling for pod
-- `profiling.io/port: "6060"` - Custom pprof port (optional)
+- `bolometer.io/enabled: "true"` - Enable profiling for pod
+- `bolometer.io/port: "6060"` - Custom pprof port (optional)
 
 ### ProfilingConfig Resource
 
 Create a ProfilingConfig to define profiling behavior:
 
 ```yaml
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: my-profiling-config
@@ -346,14 +346,15 @@ Key configurations:
 Monitors pod metrics and captures profiles when thresholds are exceeded:
 - Monitor pod metrics every `checkIntervalSeconds`
 - When CPU or memory exceeds threshold:
-  - Capture all configured profile types
-  - Upload to S3 with reason: "threshold-exceeded"
+  - Capture all configured profile types (a type that fails doesn't stop the others)
+  - Upload to S3 with the threshold that was exceeded as the reason
+    (for example `CPU usage 95.00% exceeds threshold 80%`)
   - Apply cooldown period
 
 ### On-Demand Mode
 
 Continuously captures profiles at regular intervals:
-- Captures profiles every `intervalSeconds` (30-40 seconds)
+- Captures profiles every `intervalSeconds` (30-60 seconds)
 - Upload immediately after capture
 - Independent of threshold checks
 - Uploads with reason: "on-demand"
@@ -364,20 +365,25 @@ Continuously captures profiles at regular intervals:
 Profiles are uploaded to S3 with structured naming organized by date and service:
 
 ```
-s3://{bucket}/{prefix}/{date}/{service-name}/{timestamp}-{profile-type}.pprof
+s3://{bucket}/{prefix}/{date}/{service-name}/{timestamp}-{pod-name}-{profile-type}.pprof
 ```
 
 Where:
 - `date`: YYYY-MM-DD format (e.g., 2024-01-15)
 - `service-name`: Extracted from pod labels or metadata
-- `timestamp`: YYYYMMDDHHmmss format
+- `timestamp`: YYYYMMDD-HHmmss format
+- `pod-name`: The pod the profile was captured from, so replicas profiled at
+  the same moment don't overwrite each other
 
 Example:
 ```
-s3://my-bucket/profiles/2024-01-15/my-app/20240115-120000-heap.pprof
-s3://my-bucket/profiles/2024-01-15/my-app/20240115-120000-cpu.pprof
-s3://my-bucket/profiles/2024-01-15/my-app/20240115-143000-heap.pprof
+s3://my-bucket/profiles/2024-01-15/my-app/20240115-120000-my-app-7d8f9c5b6d-xyz456-heap.pprof
+s3://my-bucket/profiles/2024-01-15/my-app/20240115-120000-my-app-7d8f9c5b6d-xyz456-cpu.pprof
+s3://my-bucket/profiles/2024-01-15/my-app/20240115-120000-my-app-7d8f9c5b6d-abc123-heap.pprof
 ```
+
+See [docs/S3_STRUCTURE.md](docs/S3_STRUCTURE.md) for details, including how
+to parse filenames.
 
 Service name is extracted from (in order of preference):
 1. `app.kubernetes.io/name` label (recommended)
@@ -390,7 +396,7 @@ Metadata tags include:
 - pod-name
 - pod-namespace
 - profile-type
-- reason (threshold-exceeded or on-demand)
+- reason (the threshold that was exceeded, or `on-demand`)
 - timestamp
 - pod labels
 
@@ -472,11 +478,19 @@ make test
 
 ## Monitoring
 
-The operator exposes Prometheus metrics on port 8080:
-- `profiling_captures_total`: Total number of profile captures
-- `profiling_uploads_total`: Total number of successful uploads
-- `profiling_errors_total`: Total number of errors
-- `profiling_threshold_violations_total`: Total threshold violations
+The operator serves controller-runtime's standard Prometheus metrics on port
+8080 (`/metrics`): reconcile counts, errors and durations, work queue depth,
+and API client requests. It doesn't export profiling-specific metrics.
+Profiling activity is reported per ProfilingConfig instead:
+
+- Status: `activePods`, `totalProfiles` (profiles captured), `totalUploads`
+  (profiles stored in S3), `lastProfileTime`, and the `Ready` condition
+- Events: `InvalidConfig` (Warning) and `ConfigValid` (Normal)
+
+```bash
+kubectl get profilingconfig -A     # active pods, profiles, uploads
+kubectl describe profilingconfig <name> -n <namespace>
+```
 
 Health checks:
 - Liveness: `http://localhost:8081/healthz`
@@ -497,6 +511,22 @@ Structured logging with:
 2. **S3 upload fails**: Verify IRSA, IAM permissions
 3. **Metrics unavailable**: Check metrics-server
 4. **High CPU usage**: Increase intervals, reduce profile types
+
+### ProfilingConfig is invalid
+
+If a ProfilingConfig is invalid (for example, `s3Config.bucket` or
+`s3Config.region` is empty), the operator stops monitoring it. It doesn't keep
+using the previous settings. The problem is reported in the `Ready` condition
+and as a `Warning` event with reason `InvalidConfig`:
+
+```bash
+kubectl describe profilingconfig <name> -n <namespace>
+kubectl get profilingconfig <name> -n <namespace> \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")]}'
+```
+
+Once the spec is fixed, monitoring resumes, `Ready` returns to `True`, and a
+`Normal` event with reason `ConfigValid` confirms the fix.
 
 ### Profiles not being captured
 

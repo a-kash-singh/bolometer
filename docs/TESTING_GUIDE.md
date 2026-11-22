@@ -31,11 +31,19 @@ Location: `internal/controller/*_test.go`
 #### Files
 - `profilingconfig_controller_test.go` - Main controller reconciliation tests
 - `pod_watcher_test.go` - Pod tracking and selection tests
+- `monitor_test.go`, `validity_test.go`, `s3_client_lifecycle_test.go` -
+  Monitor schedules, cooldowns, capture limit, status counters, invalid
+  configs and the S3 client, driven by a fake clock
+- `isolation_test.go` and the other black-box test files - End-to-end
+  captures through a test API server (port-forward, pprof) and a fake S3,
+  using only APIs that also exist in the original controller
+
+See "Running Tests" in [DEVELOPER.md](../DEVELOPER.md) for how these fit
+together, the `BOLOMETER_REAL_TIMING_TESTS` switch, and how to run the
+regression tests against the original code.
 
 #### Test Coverage
-- **22 controller tests** - Reconciliation logic, validation, monitoring lifecycle
-- **17 pod watcher tests** - Pod discovery, tracking, cooldown management
-- **66.5% code coverage** for controller package
+- **92% code coverage** for the controller package
 
 ### Example Test
 ```go
@@ -148,30 +156,26 @@ func TestValidation(t *testing.T) {
 
 ## Test Coverage Goals
 
-### Current Coverage (66.5%)
+### Current Coverage (controller package: 92%)
 
-#### Well Covered (>80%)
-- ✅ Pod discovery and filtering
-- ✅ Pod tracking lifecycle
-- ✅ Configuration validation
-- ✅ Monitoring start/stop
-- ✅ Basic reconciliation
+Covered by the controller tests, including end to end:
+- ✅ Pod discovery, per-config tracking and untracking
+- ✅ Configuration validation, the `Ready` condition and events
+- ✅ Threshold and on-demand schedules, cooldowns, spec edits
+- ✅ Background captures and the per-config capture limit
+- ✅ Profile capture through a port-forward (including partial failures and
+  lost connections)
+- ✅ S3 upload through the per-config client
+- ✅ Status counters, including conflicts and shutdown
 
-#### Partially Covered (40-80%)
-- ⚠️ On-demand monitoring (46.2%)
-- ⚠️ Threshold monitoring (87.5%)
-
-#### Not Covered (<40%)
-- ❌ Profile capture (0%)
-- ❌ S3 upload (0%)
-- ❌ Status updates after profiling (0%)
-- ❌ Threshold violation checking (0%)
+Package-level coverage of `profiler` and `uploader` (about 43% and 80%)
+counts only their own tests. Their port-forward and upload paths are also
+exercised by the controller's black-box tests.
 
 ### Future Goals
 
-**Short-term (70% coverage):**
-- Add profiler tests with mocked port-forward
-- Add S3 uploader tests with LocalStack
+- Raise `metrics` package coverage (currently about 17%)
+- Run the end-to-end flow against a real cluster (see `e2e-local.sh`)
 
 **Medium-term (80% coverage):**
 - Integration tests with envtest
@@ -289,26 +293,15 @@ Run this to see test summary:
 make test-controller
 ```
 
-Output:
+Output (abridged):
 ```
 PASS
-coverage: 66.5% of statements
-ok      github.com/profiling-operator/profiling-operator/internal/controller    1.018s
+coverage: 92.1% of statements
+ok      github.com/a-kash-singh/bolometer/internal/controller    35s
 ```
 
-Detailed coverage by function:
-```
-pod_watcher.go:40:          NewPodWatcher              100.0%
-pod_watcher.go:49:          ListMatchingPods           87.5%
-pod_watcher.go:82:          isPodProfilingEnabled      100.0%
-pod_watcher.go:92:          TrackPod                   100.0%
-pod_watcher.go:112:         StopTrackingPod            100.0%
-pod_watcher.go:148:         CanProfile                 100.0%
-profilingconfig_controller.go:43:   NewProfilingConfigReconciler   100.0%
-profilingconfig_controller.go:72:   Reconcile                      83.3%
-profilingconfig_controller.go:278:  validateConfig                 100.0%
-total:                                                     66.5%
-```
+`make test-controller` also prints coverage by function (`go tool cover
+-func controller-cover.out`).
 
 ## Contributing
 

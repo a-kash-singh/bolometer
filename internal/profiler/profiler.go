@@ -1,12 +1,13 @@
 package profiler
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,10 @@ const (
 
 	// PprofPortAnnotation is the annotation key for custom pprof port
 	PprofPortAnnotation = "bolometer.io/port"
+
+	// portForwardReadyTimeout bounds how long to wait for a port-forward to
+	// become ready.
+	portForwardReadyTimeout = 10 * time.Second
 )
 
 // Profiler captures pprof profiles from Go applications
@@ -45,42 +50,80 @@ type Profile struct {
 	Timestamp time.Time
 }
 
-// CaptureProfiles captures all specified profile types from a pod
+// CaptureProfiles captures the specified profile types from a pod.
+//
+// Each type is tried once, in order. A type that fails does not stop the
+// others: the profiles that were captured are returned together with an
+// error naming the types that failed. Callers must therefore use the
+// returned profiles even when the error is non-nil. If the port-forward
+// cannot be set up, nothing is captured.
+//
+// If a request fails below HTTP (connection refused, reset, EOF), the next
+// type gets a fresh port-forward: when the pod side reports an error,
+// client-go tears down the whole port-forward, and a request sent over it
+// meanwhile can hang until client-go's 30s stream timeout. An HTTP error from
+// the pprof endpoint leaves the connection in use.
 func (p *Profiler) CaptureProfiles(ctx context.Context, pod *corev1.Pod, profileTypes []string) ([]Profile, error) {
 	port := p.getPprofPort(pod)
 
-	// Create port-forward to the pod
-	localPort, stopChan, readyChan, err := p.setupPortForward(ctx, pod, port)
+	// Create port-forward to the pod. On success it is ready to use.
+	localPort, stopChan, err := p.setupPortForward(ctx, pod, port, portForwardReadyTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup port forward: %w", err)
 	}
-	defer close(stopChan)
-
-	// Wait for port-forward to be ready
-	select {
-	case <-readyChan:
-		// Port-forward is ready
-	case <-time.After(10 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for port forward")
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	defer func() {
+		if stopChan != nil {
+			close(stopChan)
+		}
+	}()
 
 	// Capture each profile type
 	var profiles []Profile
-	for _, profileType := range profileTypes {
+	var errs []error
+	for i, profileType := range profileTypes {
+		if err := ctx.Err(); err != nil {
+			// Cancelled or timed out: the remaining types would fail too.
+			errs = append(errs, fmt.Errorf("%s not captured: %w", strings.Join(profileTypes[i:], ", "), err))
+			break
+		}
+		if stopChan == nil {
+			// The previous request lost its connection; forward anew.
+			localPort, stopChan, err = p.setupPortForward(ctx, pod, port, portForwardReadyTimeout)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s not captured: failed to setup port forward: %w", strings.Join(profileTypes[i:], ", "), err))
+				break
+			}
+		}
 		profile, err := p.captureProfile(ctx, localPort, profileType)
 		if err != nil {
-			return nil, fmt.Errorf("failed to capture %s profile: %w", profileType, err)
+			errs = append(errs, fmt.Errorf("failed to capture %s profile: %w", profileType, err))
+			var status *statusError
+			if !errors.As(err, &status) {
+				close(stopChan)
+				stopChan = nil
+			}
+			continue
 		}
 		profiles = append(profiles, profile)
 	}
 
-	return profiles, nil
+	return profiles, errors.Join(errs...)
 }
 
-// setupPortForward creates a port-forward to the pod
-func (p *Profiler) setupPortForward(ctx context.Context, pod *corev1.Pod, remotePort int) (int, chan struct{}, chan struct{}, error) {
+// statusError is a pprof endpoint answering with a status other than 200 OK.
+// The connection to the pod is fine.
+type statusError struct {
+	code int
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("unexpected status code: %d", e.code)
+}
+
+// setupPortForward creates a port-forward to the pod and waits until it is
+// ready. It gives up when forwarding fails, readyTimeout elapses or ctx is
+// cancelled. On success the caller must close the returned stop channel.
+func (p *Profiler) setupPortForward(ctx context.Context, pod *corev1.Pod, remotePort int, readyTimeout time.Duration) (int, chan struct{}, error) {
 	// Use a local port (0 means choose automatically)
 	localPort := 0
 
@@ -93,46 +136,65 @@ func (p *Profiler) setupPortForward(ctx context.Context, pod *corev1.Pod, remote
 
 	transport, upgrader, err := spdy.RoundTripperFor(p.restConfig)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
 	stopChan := make(chan struct{}, 1)
 	readyChan := make(chan struct{})
 
-	out := &bytes.Buffer{}
-	errOut := &bytes.Buffer{}
-
 	ports := []string{fmt.Sprintf("%d:%d", localPort, remotePort)}
 
 	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
 
-	fw, err := portforward.New(dialer, ports, stopChan, readyChan, out, errOut)
+	// The forwarder writes progress messages from several goroutines at once,
+	// so the writers must be goroutine-safe (bytes.Buffer is not). Nothing
+	// reads them; failures are reported by ForwardPorts and GetPorts.
+	fw, err := portforward.New(dialer, ports, stopChan, readyChan, io.Discard, io.Discard)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
+	// ForwardPorts returns without ever closing readyChan when the dial or
+	// listen fails, so waiting on readyChan alone can block forever.
+	forwardErr := make(chan error, 1)
 	go func() {
-		if err := fw.ForwardPorts(); err != nil {
-			// Log error but don't stop the operation
-		}
+		forwardErr <- fw.ForwardPorts()
 	}()
 
+	readyTimer := time.NewTimer(readyTimeout)
+	defer readyTimer.Stop()
+
+	select {
+	case <-readyChan:
+	case err := <-forwardErr:
+		if err == nil {
+			err = fmt.Errorf("port forward stopped before becoming ready")
+		}
+		close(stopChan)
+		return 0, nil, err
+	case <-readyTimer.C:
+		close(stopChan)
+		return 0, nil, fmt.Errorf("timeout waiting for port forward")
+	case <-ctx.Done():
+		close(stopChan)
+		return 0, nil, ctx.Err()
+	}
+
 	// Get the actual local port that was chosen
-	<-readyChan
 	forwardedPorts, err := fw.GetPorts()
 	if err != nil {
 		close(stopChan)
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
 	if len(forwardedPorts) == 0 {
 		close(stopChan)
-		return 0, nil, nil, fmt.Errorf("no ports forwarded")
+		return 0, nil, fmt.Errorf("no ports forwarded")
 	}
 
 	actualLocalPort := int(forwardedPorts[0].Local)
 
-	return actualLocalPort, stopChan, readyChan, nil
+	return actualLocalPort, stopChan, nil
 }
 
 // captureProfile captures a specific profile type
@@ -156,7 +218,7 @@ func (p *Profiler) captureProfile(ctx context.Context, localPort int, profileTyp
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Profile{}, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return Profile{}, &statusError{code: resp.StatusCode}
 	}
 
 	data, err := io.ReadAll(resp.Body)

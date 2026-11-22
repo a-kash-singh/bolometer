@@ -56,8 +56,8 @@ For automated deployments, you can provide configuration via command-line:
 
 ```bash
 ./install.sh \
-  --namespace profiling-system \
-  --image ghcr.io/yourorg/profiling-operator:v0.1.0
+  --namespace bolometer-system \
+  --image ghcr.io/yourorg/bolometer:v0.1.0
 ```
 
 ## Installation Options
@@ -66,8 +66,8 @@ For automated deployments, you can provide configuration via command-line:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--namespace <name>` | Kubernetes namespace to install into | `profiling-system` |
-| `--image <image>` | Container image to use | `profiling-operator:latest` |
+| `--namespace <name>` | Kubernetes namespace to install into | `bolometer-system` |
+| `--image <image>` | Container image to use | `bolometer:latest` |
 | `--skip-aws-validation` | Skip AWS/IRSA validation checks | `false` |
 | `--localstack` | Configure for LocalStack testing | `false` |
 | `--help` | Show help message | - |
@@ -81,7 +81,7 @@ For automated deployments, you can provide configuration via command-line:
 
 **Use a specific image version:**
 ```bash
-./install.sh --image ghcr.io/yourorg/profiling-operator:v0.1.0
+./install.sh --image ghcr.io/yourorg/bolometer:v0.1.0
 ```
 
 **Skip AWS validation (for non-AWS clusters):**
@@ -118,7 +118,7 @@ For automated deployments, you can provide configuration via command-line:
 
 3. **Create IAM Policy**
 
-   Create a file `profiling-operator-policy.json`:
+   Create a file `bolometer-s3-policy.json`:
    ```json
    {
      "Version": "2012-10-17",
@@ -146,7 +146,7 @@ For automated deployments, you can provide configuration via command-line:
    ```bash
    aws iam create-policy \
      --policy-name ProfilingOperatorPolicy \
-     --policy-document file://profiling-operator-policy.json
+     --policy-document file://bolometer-s3-policy.json
    ```
 
 4. **Create IAM Role for IRSA**
@@ -171,7 +171,7 @@ For automated deployments, you can provide configuration via command-line:
          "Action": "sts:AssumeRoleWithWebIdentity",
          "Condition": {
            "StringEquals": {
-             "oidc.eks.${AWS_REGION}.amazonaws.com/id/${OIDC_ID}:sub": "system:serviceaccount:profiling-system:profiling-operator",
+             "oidc.eks.${AWS_REGION}.amazonaws.com/id/${OIDC_ID}:sub": "system:serviceaccount:bolometer-system:bolometer",
              "oidc.eks.${AWS_REGION}.amazonaws.com/id/${OIDC_ID}:aud": "sts.amazonaws.com"
            }
          }
@@ -185,11 +185,11 @@ For automated deployments, you can provide configuration via command-line:
    envsubst < trust-policy.json > trust-policy-final.json
 
    aws iam create-role \
-     --role-name profiling-operator-role \
+     --role-name bolometer-role \
      --assume-role-policy-document file://trust-policy-final.json
 
    aws iam attach-role-policy \
-     --role-name profiling-operator-role \
+     --role-name bolometer-role \
      --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/ProfilingOperatorPolicy
    ```
 
@@ -204,7 +204,7 @@ Now run the installation script and provide the IAM role ARN when prompted:
 When prompted, enter:
 - **S3 bucket name**: `my-profiling-bucket`
 - **AWS region**: `us-west-2`
-- **IAM Role ARN**: `arn:aws:iam::123456789012:role/profiling-operator-role`
+- **IAM Role ARN**: `arn:aws:iam::123456789012:role/bolometer-role`
 
 ## Local/Development Setup
 
@@ -252,7 +252,7 @@ When prompted, enter:
    make docker-build
 
    # Load into kind
-   kind load docker-image profiling-operator:latest --name profiling-test
+   kind load docker-image bolometer:latest --name profiling-test
 
    # Install with LocalStack mode
    ./install.sh --localstack
@@ -265,7 +265,7 @@ Similar to kind, but use `minikube image load` instead of `kind load docker-imag
 ```bash
 minikube start
 make docker-build
-minikube image load profiling-operator:latest
+minikube image load bolometer:latest
 ./install.sh --localstack
 ```
 
@@ -276,31 +276,31 @@ The installation script automatically validates the installation, but you can ma
 ### 1. Check Deployment Status
 
 ```bash
-kubectl get deployment profiling-operator -n profiling-system
+kubectl get deployment bolometer -n bolometer-system
 ```
 
 Expected output:
 ```
 NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
-profiling-operator    1/1     1            1           2m
+bolometer    1/1     1            1           2m
 ```
 
 ### 2. Check Pod Status
 
 ```bash
-kubectl get pods -n profiling-system
+kubectl get pods -n bolometer-system
 ```
 
 Expected output:
 ```
 NAME                                  READY   STATUS    RESTARTS   AGE
-profiling-operator-xxxxx-yyyyy        1/1     Running   0          2m
+bolometer-xxxxx-yyyyy        1/1     Running   0          2m
 ```
 
 ### 3. Check Logs
 
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator
+kubectl logs -n bolometer-system -l app=bolometer
 ```
 
 Look for:
@@ -311,19 +311,19 @@ Look for:
 ### 4. Check CRD
 
 ```bash
-kubectl get crd profilingconfigs.profiling.io
+kubectl get crd profilingconfigs.bolometer.io
 ```
 
 ### 5. Check Health Endpoints
 
 ```bash
-POD_NAME=$(kubectl get pods -n profiling-system -l app=profiling-operator -o jsonpath='{.items[0].metadata.name}')
+POD_NAME=$(kubectl get pods -n bolometer-system -l app=bolometer -o jsonpath='{.items[0].metadata.name}')
 
 # Liveness probe
-kubectl exec -n profiling-system $POD_NAME -- wget -q -O- http://localhost:8081/healthz
+kubectl exec -n bolometer-system $POD_NAME -- wget -q -O- http://localhost:8081/healthz
 
 # Readiness probe
-kubectl exec -n profiling-system $POD_NAME -- wget -q -O- http://localhost:8081/readyz
+kubectl exec -n bolometer-system $POD_NAME -- wget -q -O- http://localhost:8081/readyz
 ```
 
 Both should return: `ok`
@@ -388,14 +388,14 @@ kubectl patch deployment metrics-server -n kube-system --type='json' \
 - If using local image, ensure it's loaded into the cluster:
   ```bash
   # kind
-  kind load docker-image profiling-operator:latest
+  kind load docker-image bolometer:latest
 
   # minikube
-  minikube image load profiling-operator:latest
+  minikube image load bolometer:latest
   ```
 - Use a registry image instead:
   ```bash
-  ./install.sh --image ghcr.io/yourorg/profiling-operator:v0.1.0
+  ./install.sh --image ghcr.io/yourorg/bolometer:v0.1.0
   ```
 
 ---
@@ -404,7 +404,7 @@ kubectl patch deployment metrics-server -n kube-system --type='json' \
 
 **Solution:** Check logs for errors:
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator --previous
+kubectl logs -n bolometer-system -l app=bolometer --previous
 ```
 
 Common issues:
@@ -418,8 +418,8 @@ Common issues:
 
 **Solution:** The CRD wasn't applied. Manually apply:
 ```bash
-kubectl apply -f config/crd/profiling.io_profilingconfigs.yaml
-kubectl wait --for=condition=Established --timeout=60s crd/profilingconfigs.profiling.io
+kubectl apply -f config/crd/bolometer.io_profilingconfigs.yaml
+kubectl wait --for=condition=Established --timeout=60s crd/profilingconfigs.bolometer.io
 ```
 
 ### AWS/IRSA Issues
@@ -430,13 +430,13 @@ kubectl wait --for=condition=Established --timeout=60s crd/profilingconfigs.prof
 
 1. Check service account annotation:
    ```bash
-   kubectl get sa profiling-operator -n profiling-system -o yaml
+   kubectl get sa bolometer -n bolometer-system -o yaml
    ```
 
    Should have:
    ```yaml
    annotations:
-     eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/profiling-operator-role
+     eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/bolometer-role
    ```
 
 2. Verify IAM role trust policy includes the service account
@@ -445,7 +445,7 @@ kubectl wait --for=condition=Established --timeout=60s crd/profilingconfigs.prof
 
 4. Test AWS credentials in the pod:
    ```bash
-   kubectl exec -n profiling-system <pod-name> -- env | grep AWS
+   kubectl exec -n bolometer-system <pod-name> -- env | grep AWS
    ```
 
 ## Manual Installation
@@ -455,13 +455,13 @@ If you prefer not to use the installation script:
 ### 1. Create Namespace
 
 ```bash
-kubectl create namespace profiling-system
+kubectl create namespace bolometer-system
 ```
 
 ### 2. Install CRDs
 
 ```bash
-kubectl apply -f config/crd/profiling.io_profilingconfigs.yaml
+kubectl apply -f config/crd/bolometer.io_profilingconfigs.yaml
 ```
 
 ### 3. Create Service Account
@@ -490,8 +490,8 @@ kubectl apply -f config/manager/deployment.yaml
 ### 6. Verify
 
 ```bash
-kubectl get pods -n profiling-system
-kubectl logs -n profiling-system -l app=profiling-operator
+kubectl get pods -n bolometer-system
+kubectl logs -n bolometer-system -l app=bolometer
 ```
 
 ## Uninstallation
@@ -509,7 +509,7 @@ kubectl delete -f config/rbac/
 kubectl delete -f config/crd/
 
 # Delete namespace
-kubectl delete namespace profiling-system
+kubectl delete namespace bolometer-system
 ```
 
 ### Using Helm
@@ -517,9 +517,9 @@ kubectl delete namespace profiling-system
 If installed via Helm:
 
 ```bash
-helm uninstall profiling-operator -n profiling-system
-kubectl delete crd profilingconfigs.profiling.io
-kubectl delete namespace profiling-system
+helm uninstall bolometer -n bolometer-system
+kubectl delete crd profilingconfigs.bolometer.io
+kubectl delete namespace bolometer-system
 ```
 
 ### Clean Up S3 Data

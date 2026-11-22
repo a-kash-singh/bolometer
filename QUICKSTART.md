@@ -84,7 +84,7 @@ Create trust policy `trust-policy.json`:
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:profiling-system:profiling-operator"
+          "oidc.eks.REGION.amazonaws.com/id/OIDC_ID:sub": "system:serviceaccount:bolometer-system:bolometer"
         }
       }
     }
@@ -98,11 +98,11 @@ Create the role:
 
 ```bash
 aws iam create-role \
-  --role-name profiling-operator-role \
+  --role-name bolometer-role \
   --assume-role-policy-document file://trust-policy.json
 
 aws iam attach-role-policy \
-  --role-name profiling-operator-role \
+  --role-name bolometer-role \
   --policy-arn arn:aws:iam::${ACCOUNT_ID}:policy/ProfilingOperatorS3Access
 ```
 
@@ -111,9 +111,9 @@ aws iam attach-role-policy \
 ### Option A: Using Helm (Recommended)
 
 ```bash
-helm install profiling-operator ./helm/profiling-operator \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::${ACCOUNT_ID}:role/profiling-operator-role" \
-  --namespace profiling-system \
+helm install bolometer ./helm/bolometer \
+  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::${ACCOUNT_ID}:role/bolometer-role" \
+  --namespace bolometer-system \
   --create-namespace
 ```
 
@@ -123,7 +123,7 @@ helm install profiling-operator ./helm/profiling-operator \
 
 ```yaml
 annotations:
-  eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/profiling-operator-role
+  eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/bolometer-role
 ```
 
 2. Deploy:
@@ -137,8 +137,8 @@ kubectl apply -f config/manager/
 ### Verify Installation
 
 ```bash
-kubectl get pods -n profiling-system
-kubectl logs -n profiling-system -l app=profiling-operator
+kubectl get pods -n bolometer-system
+kubectl logs -n bolometer-system -l app=bolometer
 ```
 
 ## Step 4: Deploy a Sample Application
@@ -163,7 +163,7 @@ Or use your existing Go application with pprof enabled.
 Create `my-profiling-config.yaml`:
 
 ```yaml
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: demo-profiling
@@ -222,7 +222,7 @@ done
 ### Check Operator Logs
 
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator -f
+kubectl logs -n bolometer-system -l app=bolometer -f
 ```
 
 You should see logs indicating:
@@ -240,9 +240,9 @@ aws s3 ls s3://my-profiling-bucket/profiles/ --recursive
 
 You should see profiles organized by date and service:
 ```
-profiles/2024-01-15/demo-go-app/20240115-120000-heap.pprof
-profiles/2024-01-15/demo-go-app/20240115-120000-cpu.pprof
-profiles/2024-01-15/demo-go-app/20240115-143000-heap.pprof
+profiles/2024-01-15/demo-go-app/20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-heap.pprof
+profiles/2024-01-15/demo-go-app/20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-cpu.pprof
+profiles/2024-01-15/demo-go-app/20240115-143000-demo-go-app-6d4f8b7c9-q7xzt-heap.pprof
 ```
 
 ## Step 7: Enable On-Demand Profiling (Optional)
@@ -281,16 +281,16 @@ Analyze with Go's pprof tool:
 
 ```bash
 # Heap profile
-go tool pprof 20240115-120000-heap.pprof
+go tool pprof 20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-heap.pprof
 
 # CPU profile
-go tool pprof 20240115-120000-cpu.pprof
+go tool pprof 20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-cpu.pprof
 
 # Goroutine profile
-go tool pprof 20240115-120000-goroutine.pprof
+go tool pprof 20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-goroutine.pprof
 
 # Interactive web UI
-go tool pprof -http=:8081 20240115-120000-cpu.pprof
+go tool pprof -http=:8081 20240115-120000-demo-go-app-6d4f8b7c9-q7xzt-cpu.pprof
 ```
 
 ## Troubleshooting
@@ -299,7 +299,7 @@ go tool pprof -http=:8081 20240115-120000-cpu.pprof
 
 Check logs:
 ```bash
-kubectl logs -n profiling-system -l app=profiling-operator
+kubectl logs -n bolometer-system -l app=bolometer
 ```
 
 ### Profiles not being captured
@@ -324,7 +324,7 @@ kubectl top pod -n demo
 
 1. Verify IRSA annotation:
 ```bash
-kubectl get sa profiling-operator -n profiling-system -o yaml
+kubectl get sa bolometer -n bolometer-system -o yaml
 ```
 
 2. Check IAM role and policy
@@ -355,13 +355,13 @@ kubectl delete profilingconfig demo-profiling -n demo
 kubectl delete -f examples/target-app.yaml
 
 # Uninstall operator
-helm uninstall profiling-operator -n profiling-system
+helm uninstall bolometer -n bolometer-system
 # or
 kubectl delete -f config/manager/
 kubectl delete -f config/crd/
 kubectl delete -f config/rbac/
 
 # Delete namespace
-kubectl delete namespace profiling-system
+kubectl delete namespace bolometer-system
 ```
 

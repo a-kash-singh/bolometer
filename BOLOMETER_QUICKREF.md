@@ -62,17 +62,18 @@ Helm:       helm repo add bolometer https://bolometer-io.github.io/charts
 
 ## What Stays the Same
 
-✅ **CRD Domain**: `profiling.io/v1alpha1`
-✅ **Annotations**: `profiling.io/enabled: "true"`
 ✅ **Kind**: `ProfilingConfig`
-✅ **All existing configs work** - Zero breaking changes!
+
+Note: the API group and annotations are `bolometer.io` (`bolometer.io/v1alpha1`,
+`bolometer.io/enabled`, `bolometer.io/port`). Manifests and pods that still
+use `profiling.io` are not picked up.
 
 ## What Changes
 
 📝 **Project Name**: Profiling Operator → Bolometer
 📝 **Repository**: github.com/bolometer-io/bolometer
 📝 **Images**: bolometer:latest
-📝 **Namespace**: profiling-system → bolometer-system (optional)
+📝 **Namespace**: bolometer-system
 
 ## Core Features
 
@@ -87,7 +88,7 @@ Helm:       helm repo add bolometer https://bolometer-io.github.io/charts
 ## Quick Example
 
 ```yaml
-apiVersion: profiling.io/v1alpha1
+apiVersion: bolometer.io/v1alpha1
 kind: ProfilingConfig
 metadata:
   name: my-app-profiling
@@ -119,8 +120,8 @@ kind: Pod
 metadata:
   name: my-go-app
   annotations:
-    profiling.io/enabled: "true"
-    profiling.io/port: "6060"
+    bolometer.io/enabled: "true"
+    bolometer.io/port: "6060"
 spec:
   containers:
   - name: app

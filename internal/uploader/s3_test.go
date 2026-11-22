@@ -152,7 +152,7 @@ func TestGenerateKey(t *testing.T) {
 
 	key := uploader.generateKey(pod, profile)
 
-	// Expected format: profiles/2024-01-15/test-app/20240115-123045-heap.pprof
+	// Expected format: profiles/2024-01-15/test-app/20240115-123045-test-app-abc123-xyz456-heap.pprof
 	expectedDate := "2024-01-15"
 	expectedService := "test-app"
 	expectedPrefix := "profiles"
@@ -162,7 +162,7 @@ func TestGenerateKey(t *testing.T) {
 	}
 
 	// Check the exact format
-	expectedKey := "profiles/2024-01-15/test-app/20240115-123045-heap.pprof"
+	expectedKey := "profiles/2024-01-15/test-app/20240115-123045-test-app-abc123-xyz456-heap.pprof"
 	if key != expectedKey {
 		t.Errorf("Expected key %q, got %q", expectedKey, key)
 	}
@@ -189,15 +189,15 @@ func TestGenerateKeyDifferentDates(t *testing.T) {
 	}{
 		{
 			date:     time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
-			expected: "data/2024-01-15/my-service/20240115-100000-cpu.pprof",
+			expected: "data/2024-01-15/my-service/20240115-100000-service-abc-cpu.pprof",
 		},
 		{
 			date:     time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC),
-			expected: "data/2024-12-31/my-service/20241231-235959-cpu.pprof",
+			expected: "data/2024-12-31/my-service/20241231-235959-service-abc-cpu.pprof",
 		},
 		{
 			date:     time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC),
-			expected: "data/2025-02-01/my-service/20250201-000000-cpu.pprof",
+			expected: "data/2025-02-01/my-service/20250201-000000-service-abc-cpu.pprof",
 		},
 	}
 
@@ -232,4 +232,16 @@ func containsAll(s string, substrs ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestMetadataKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"pod-label-app":                    "pod-label-app",
+		"pod-label-app.kubernetes.io/name": "pod-label-app.kubernetes.io_name",
+		"pod-label-example.com/a b":        "pod-label-example.com_a_b",
+	} {
+		if got := metadataKey(in); got != want {
+			t.Errorf("metadataKey(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

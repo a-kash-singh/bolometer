@@ -2,10 +2,13 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -30,26 +33,35 @@ func setupTestReconciler(objs ...client.Object) *ProfilingConfigReconciler {
 	_ = profilingv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
 
-	fakeClient := fakeclient.NewClientBuilder().
+	// Writes are serialized, as they effectively are in the API server (see
+	// serializeWrites): monitors write status while tests edit specs.
+	fakeClient := serializeWrites(fakeclient.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&profilingv1alpha1.ProfilingConfig{}).
-		Build()
+		Build())
 
 	fakeClientset := fake.NewSimpleClientset()
 	fakeMetricsClient := &fakeMetricsClientset{}
 
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	reconciler := &ProfilingConfigReconciler{
-		Client:         fakeClient,
-		Scheme:         scheme,
-		Clientset:      fakeClientset,
-		MetricsClient:  fakeMetricsClient,
-		RestConfig:     &rest.Config{},
-		podWatcher:     NewPodWatcher(fakeClientset),
+		Client:        fakeClient,
+		Scheme:        scheme,
+		Clientset:     fakeClientset,
+		MetricsClient: fakeMetricsClient,
+		RestConfig:    &rest.Config{},
+		podWatcher:    NewPodWatcher(fakeClientset),
+		// Monitors started by these tests run on the real clock and are not
+		// stopped, so in a long test run (e.g. -count) their first check does
+		// fire. Give them harmless fakes instead of nil dependencies.
+		metricsCollector: &fakeMetrics{},
+		captureFn: func(context.Context, *corev1.Pod, *profilingv1alpha1.ProfilingConfig, string) (captureResult, error) {
+			return captureResult{}, fmt.Errorf("profile capture is not available in tests")
+		},
 		baseCtx:        baseCtx,
 		baseCancel:     baseCancel,
-		activeMonitors: make(map[string]context.CancelFunc),
+		activeMonitors: make(map[string]*configMonitor),
 	}
 
 	return reconciler
@@ -176,49 +188,46 @@ func TestReconcile_ValidConfig(t *testing.T) {
 	}
 }
 
+// An invalid config is reported in the Ready condition; Reconcile itself
+// succeeds (retrying cannot fix the spec) and does not requeue.
 func TestReconcile_InvalidConfig_MissingBucket(t *testing.T) {
 	config := createTestProfilingConfig("test-config", "default")
 	config.Spec.S3Config.Bucket = ""
-	reconciler := setupTestReconciler(config)
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      config.Name,
-			Namespace: config.Namespace,
-		},
-	}
-
-	_, err := reconciler.Reconcile(context.Background(), req)
-
-	if err == nil {
-		t.Error("Expected error for missing S3 bucket")
-	}
-
-	if err.Error() != "s3 bucket is required" {
-		t.Errorf("Expected 's3 bucket is required' error, got: %v", err)
-	}
+	assertReconciledInvalid(t, config, "s3 bucket is required")
 }
 
 func TestReconcile_InvalidConfig_MissingRegion(t *testing.T) {
 	config := createTestProfilingConfig("test-config", "default")
 	config.Spec.S3Config.Region = ""
+	assertReconciledInvalid(t, config, "s3 region is required")
+}
+
+func assertReconciledInvalid(t *testing.T, config *profilingv1alpha1.ProfilingConfig, wantMessage string) {
+	t.Helper()
 	reconciler := setupTestReconciler(config)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: config.Name, Namespace: config.Namespace}}
 
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      config.Name,
-			Namespace: config.Namespace,
-		},
+	result, err := reconciler.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned %v for an invalid config; want nil", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Errorf("Expected no requeue for an invalid config, got %+v", result)
+	}
+	if _, running := reconciler.activeMonitors[req.NamespacedName.String()]; running {
+		t.Error("Expected no monitor for an invalid config")
 	}
 
-	_, err := reconciler.Reconcile(context.Background(), req)
-
-	if err == nil {
-		t.Error("Expected error for missing S3 region")
+	updated := &profilingv1alpha1.ProfilingConfig{}
+	if err := reconciler.Get(context.Background(), req.NamespacedName, updated); err != nil {
+		t.Fatal(err)
 	}
-
-	if err.Error() != "s3 region is required" {
-		t.Errorf("Expected 's3 region is required' error, got: %v", err)
+	c := meta.FindStatusCondition(updated.Status.Conditions, ConditionReady)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonInvalidConfig || !strings.Contains(c.Message, wantMessage) {
+		t.Errorf("Ready condition = %+v, want False/%s mentioning %q", c, ReasonInvalidConfig, wantMessage)
+	}
+	if updated.Status.ActivePods != 0 {
+		t.Errorf("Expected activePods=0 for an invalid config, got %d", updated.Status.ActivePods)
 	}
 }
 
@@ -364,7 +373,7 @@ func TestReconcile_PodWithoutAnnotation(t *testing.T) {
 	}
 }
 
-func TestReconcile_MonitoringRestartOnUpdate(t *testing.T) {
+func TestReconcile_ReusesRunningMonitor(t *testing.T) {
 	config := createTestProfilingConfig("test-config", "default")
 	reconciler := setupTestReconciler(config)
 
@@ -382,26 +391,25 @@ func TestReconcile_MonitoringRestartOnUpdate(t *testing.T) {
 	}
 
 	configKey := req.NamespacedName.String()
-	firstCancel, ok := reconciler.activeMonitors[configKey]
+	first, ok := reconciler.activeMonitors[configKey]
 	if !ok {
 		t.Fatal("Expected monitoring to be started")
 	}
 
-	// Second reconcile - should restart monitoring
+	// Second reconcile - monitoring keeps running; the running monitor is
+	// handed the latest config instead of being restarted.
 	_, err = reconciler.Reconcile(context.Background(), req)
 	if err != nil {
 		t.Errorf("Second reconcile failed: %v", err)
 	}
 
-	secondCancel, ok := reconciler.activeMonitors[configKey]
+	second, ok := reconciler.activeMonitors[configKey]
 	if !ok {
-		t.Fatal("Expected monitoring to be restarted")
+		t.Fatal("Expected monitoring to still be running")
 	}
 
-	// Verify it's a new cancel function (monitoring was restarted)
-	// We can't directly compare functions, but we can check they're both present
-	if firstCancel == nil || secondCancel == nil {
-		t.Error("Expected valid cancel functions")
+	if first != second {
+		t.Error("Expected the running monitor to be reused, not restarted")
 	}
 }
 
